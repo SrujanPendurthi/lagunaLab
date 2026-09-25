@@ -27,6 +27,8 @@ class ExpertStore:
         self.layout, self.slots = layout, slots
         self.fd = os.open(Path(pack_dir) / "experts" / f"layer_{layer:02d}.bin", os.O_RDONLY)
         glu = SwitchGLU(hidden, inter, slots)
+        # match the packed scales dtype (bf16 on the real model): no cast on write, no f32 promotion
+        glu.set_dtype(getattr(mx, layout["arrays"]["gate_proj.scales"]["dtype"]))
         nn.quantize(glu, group_size=group_size, bits=bits)
         self.glu = glu
         self.slot_expert = [-1] * slots
@@ -87,7 +89,7 @@ class StreamingSwitchGLU(nn.Module):
                 table[e], member[e] = s, True
             y = store.glu(x, mx.array(table[idx]))
             if len(experts) > store.slots:
-                y = y * mx.array(member[idx])[..., None].astype(y.dtype)
+                y = mx.where(mx.array(member[idx])[..., None], y, 0)
             out = y if out is None else out + y
         return out
 

@@ -75,3 +75,23 @@ def test_streaming_decode_with_cache_matches_resident(tmp_path):
     got += [np.array(streamed(ids[:, i : i + 1], cache=cache)) for i in range(10, 16)]
     np.testing.assert_allclose(np.concatenate(got, axis=1), want, atol=1e-5, rtol=1e-5)
     assert stream_stats(streamed)["hits"] > 0  # decode reuses cached experts
+
+
+def test_streaming_bfloat16_is_exact_and_stays_bfloat16(tmp_path):
+    d, resident = quantized_model_dir(tmp_path, dtype=mx.bfloat16)
+    out = tmp_path / "packed"
+    pack(d, out)
+    streamed, _ = load_streaming(out, slots=3)
+    ids = _ids(20)
+    got, want = streamed(ids), resident(ids)
+    assert want.dtype == mx.bfloat16 and got.dtype == mx.bfloat16
+    assert mx.array_equal(got, want).item()
+
+
+def test_streaming_matches_resident_on_sorted_switchglu_path(tmp_path):
+    d, resident = quantized_model_dir(tmp_path)
+    out = tmp_path / "packed"
+    pack(d, out)
+    streamed, _ = load_streaming(out, slots=3)
+    ids = _ids(48, seed=8)  # 48 tokens * top-2 = 96 >= 64: SwitchGLU sorts indices
+    np.testing.assert_allclose(np.array(streamed(ids)), np.array(resident(ids)), atol=1e-5, rtol=1e-5)

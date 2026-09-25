@@ -75,14 +75,17 @@ def mlx_model(tmodel):
     return m
 
 
-def quantized_model_dir(tmp_path, seed=0):
-    """Tiny 4-bit model saved like an mlx-lm model dir; returns (dir, model)."""
+def quantized_model_dir(tmp_path, seed=0, dtype=None):
+    """Tiny 4-bit model saved like an mlx-lm model dir; returns (dir, model).
+    `dtype` (e.g. mx.bfloat16) casts before quantizing, like the real checkpoint."""
     import json
 
     import mlx.nn as nn
     from mlx.utils import tree_flatten
 
     m = mlx_model(torch_model(seed))
+    if dtype is not None:
+        m.set_dtype(dtype)
     nn.quantize(m, group_size=32, bits=4)
     mx.eval(m.parameters())
     d = tmp_path / "tiny-4bit"
