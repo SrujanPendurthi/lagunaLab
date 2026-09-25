@@ -4,6 +4,7 @@ import mlx.core as mx
 import numpy as np
 
 from scripts.pack_experts import _to_bytes, expert_from_bytes, pack, read_expert
+from laguna_mlx.streaming import load_streaming, stream_stats
 from tests.tiny import TINY, quantized_model_dir
 
 
@@ -45,3 +46,32 @@ def test_bfloat16_round_trips_bit_exact():
     assert got.dtype == mx.bfloat16
     assert _to_bytes(got) == raw  # bit-exact, including the -0.0 sign bit
     assert mx.array_equal(got, a).item()
+
+
+def _ids(n, seed=6):
+    return mx.array(np.random.default_rng(seed).integers(0, TINY["vocab_size"], size=(1, n)))
+
+
+def test_streaming_matches_resident_with_fewer_slots_than_experts(tmp_path):
+    d, resident = quantized_model_dir(tmp_path)
+    out = tmp_path / "packed"
+    pack(d, out)
+    streamed, _ = load_streaming(out, slots=3)  # 3 < 8 experts: prefill must group
+    ids = _ids(20)
+    np.testing.assert_allclose(np.array(streamed(ids)), np.array(resident(ids)), atol=1e-5, rtol=1e-5)
+    s = stream_stats(streamed)
+    assert s["misses"] > 0 and s["bytes_read"] > 0
+
+
+def test_streaming_decode_with_cache_matches_resident(tmp_path):
+    d, resident = quantized_model_dir(tmp_path)
+    out = tmp_path / "packed"
+    pack(d, out)
+    streamed, _ = load_streaming(out, slots=4)
+    ids = _ids(16, seed=7)
+    want = np.array(resident(ids))
+    cache = streamed.make_cache()
+    got = [np.array(streamed(ids[:, :10], cache=cache))]
+    got += [np.array(streamed(ids[:, i : i + 1], cache=cache)) for i in range(10, 16)]
+    np.testing.assert_allclose(np.concatenate(got, axis=1), want, atol=1e-5, rtol=1e-5)
+    assert stream_stats(streamed)["hits"] > 0  # decode reuses cached experts
