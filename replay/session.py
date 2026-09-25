@@ -16,12 +16,16 @@ def normalize(m):
     if m.get("tool_calls"):
         calls = []
         for tc in m["tool_calls"]:
-            args = tc["function"]["arguments"]
+            args = tc["function"].get("arguments", {})
             if isinstance(args, str):
+                original = args
                 try:
                     args = json.loads(args)
                 except ValueError:
-                    args = {"_raw": args}  # model emitted malformed JSON; keep the text
+                    args = {"_raw": original}  # model emitted malformed JSON; keep the text
+                # JSON parsed to non-dict (null, list, number, bool) -> wrap in _raw
+                if not isinstance(args, dict):
+                    args = {"_raw": original}
             calls.append({**tc, "function": {**tc["function"], "arguments": args}})
         m["tool_calls"] = calls
     return m

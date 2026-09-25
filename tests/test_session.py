@@ -29,6 +29,13 @@ def test_normalize_handles_openai_shapes():
     bad = {"role": "assistant", "content": "", "tool_calls": [
         {"function": {"name": "bash", "arguments": "{not json"}}]}
     assert normalize(bad)["tool_calls"][0]["function"]["arguments"] == {"_raw": "{not json"}
+    # JSON-parseable non-dict values should also be wrapped in _raw
+    null_args = {"role": "assistant", "content": "", "tool_calls": [
+        {"function": {"name": "bash", "arguments": "null"}}]}
+    assert normalize(null_args)["tool_calls"][0]["function"]["arguments"] == {"_raw": "null"}
+    list_args = {"role": "assistant", "content": "", "tool_calls": [
+        {"function": {"name": "bash", "arguments": "[]"}}]}
+    assert normalize(list_args)["tool_calls"][0]["function"]["arguments"] == {"_raw": "[]"}
 
 
 def test_load_session_uses_last_chat_request(tmp_path):
@@ -56,3 +63,16 @@ def test_truncation_is_flagged(tok):
     msgs = [normalize(m) for m in MESSAGES]
     ids, mask, truncated = tokenize(tok, msgs, None, max_tokens=10)
     assert truncated and len(ids) == 10 and len(mask) == 10
+
+
+def test_tokenize_with_null_arguments(tok):
+    # Tool call with "null" arguments (parsed JSON non-dict) should tokenize without error
+    msgs = [
+        normalize({"role": "system", "content": "You are a helper."}),
+        normalize({"role": "user", "content": "do something"}),
+        normalize({"role": "assistant", "content": None, "tool_calls": [
+            {"id": "t1", "type": "function", "function": {"name": "no_args", "arguments": "null"}}
+        ]}),
+    ]
+    ids, mask, truncated = tokenize(tok, msgs, None)
+    assert len(ids) == len(mask) and not truncated
