@@ -73,3 +73,20 @@ def mlx_model(tmodel):
     m.load_weights(list(w.items()))
     mx.eval(m.parameters())
     return m
+
+
+def quantized_model_dir(tmp_path, seed=0):
+    """Tiny 4-bit model saved like an mlx-lm model dir; returns (dir, model)."""
+    import json
+
+    import mlx.nn as nn
+    from mlx.utils import tree_flatten
+
+    m = mlx_model(torch_model(seed))
+    nn.quantize(m, group_size=32, bits=4)
+    mx.eval(m.parameters())
+    d = tmp_path / "tiny-4bit"
+    d.mkdir()
+    mx.save_safetensors(str(d / "model.safetensors"), dict(tree_flatten(m.parameters())))
+    (d / "config.json").write_text(json.dumps({**TINY, "quantization": {"group_size": 32, "bits": 4}}))
+    return d, m
