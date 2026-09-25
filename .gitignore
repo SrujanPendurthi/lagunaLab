@@ -1,0 +1,6 @@
+models/
+data/
+traces/
+refs/
+__pycache__/
+.DS_Store
