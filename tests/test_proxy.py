@@ -1,6 +1,7 @@
 import http.server
 import json
 import socket
+import struct
 import threading
 import time
 import urllib.error
@@ -108,3 +109,43 @@ def test_client_disconnect_mid_stream_still_logs(tmp_path):
     assert lines[0]["status"] == 200  # Real upstream status, not fabricated 500
     assert lines[0]["request"]["messages"][0]["content"] == "test"
     assert "[DONE]" in lines[0]["response"]  # Real upstream response, complete
+
+
+class UpstreamSlow(http.server.BaseHTTPRequestHandler):
+    """Upstream handler that delays before responding."""
+    def do_POST(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        time.sleep(0.3)  # Delay before responding
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        for part in (b'data: {"a":1}\n\n', b"data: [DONE]\n\n"):
+            self.wfile.write(part)
+            self.wfile.flush()
+
+    def log_message(self, *a):
+        pass
+
+
+def test_client_rst_during_header_flush_still_logs(tmp_path):
+    """Client sends POST then RST before proxy finishes sending headers; log must capture real status."""
+    up = serve(UpstreamSlow)
+    log = tmp_path / "t.jsonl"
+    px = serve(make_handler(f"http://127.0.0.1:{up.server_port}", str(log)))
+    body = json.dumps({"messages": [{"role": "user", "content": "delayed"}]}).encode()
+
+    # Send POST via raw socket, set SO_LINGER=(1,0) to force RST on close
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.connect(("127.0.0.1", px.server_port))
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+    request = f"POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {len(body)}\r\nContent-Type: application/json\r\n\r\n".encode() + body
+    sock.sendall(request)
+    # Close with RST (SO_LINGER forces abrupt close)
+    sock.close()
+
+    # Verify log has exactly one entry with real upstream status (200) and complete response
+    lines = wait_for_log_lines(log, 1, timeout=2.0)
+    assert len(lines) == 1
+    assert lines[0]["status"] == 200  # Real upstream status
+    assert lines[0]["request"]["messages"][0]["content"] == "delayed"
+    assert "[DONE]" in lines[0]["response"]  # Real complete response from upstream

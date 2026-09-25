@@ -5,11 +5,44 @@ python3 scripts/proxy.py --listen 11434 --upstream http://127.0.0.1:11435 --out 
 import argparse
 import http.server
 import json
-import socket
 import urllib.error
 import urllib.request
 
 HOP = {"host", "content-length", "transfer-encoding", "connection"}
+
+
+class _ClientWriter:
+    """Wraps the handler's wfile: a vanished client ends output, never the request."""
+
+    def __init__(self, raw, handler):
+        self.raw, self.handler = raw, handler
+
+    def write(self, data):
+        if not self.handler.client_gone:
+            try:
+                self.raw.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                self.handler.client_gone = True
+                self.handler.close_connection = True
+        return len(data)
+
+    def flush(self):
+        if not self.handler.client_gone:
+            try:
+                self.raw.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                self.handler.client_gone = True
+                self.handler.close_connection = True
+
+    def close(self):
+        try:
+            self.raw.close()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    @property
+    def closed(self):
+        return self.raw.closed
 
 
 def make_handler(upstream, out):
@@ -17,15 +50,10 @@ def make_handler(upstream, out):
         protocol_version = "HTTP/1.1"
         client_gone = False
 
-        def _send(self, data):
-            """Send data to client; set client_gone and close_connection if client is unreachable."""
-            if self.client_gone:
-                return
-            try:
-                self.wfile.write(data)
-            except (BrokenPipeError, ConnectionResetError):
-                self.client_gone = True
-                self.close_connection = True
+        def setup(self):
+            super().setup()
+            self.client_gone = False
+            self.wfile = _ClientWriter(self.wfile, self)
 
         def _relay(self, body):
             """Forward, stream the body back as chunks, return (status, raw bytes). No terminator."""
@@ -40,14 +68,14 @@ def make_handler(upstream, out):
                 self.send_response(504)
                 self.send_header("Transfer-Encoding", "chunked")
                 self.end_headers()
-                self._send(b"%x\r\n%s\r\n" % (len(msg), msg))
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(msg), msg))
                 return 504, msg
             except urllib.error.URLError as e:
                 msg = f"proxy: upstream unreachable: {e.reason}".encode()
                 self.send_response(502)
                 self.send_header("Transfer-Encoding", "chunked")
                 self.end_headers()
-                self._send(b"%x\r\n%s\r\n" % (len(msg), msg))
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(msg), msg))
                 return 502, msg
             try:
                 self.send_response(resp.status)
@@ -64,9 +92,8 @@ def make_handler(upstream, out):
                         if not chunk:
                             break
                         chunks.append(chunk)
-                        self._send(b"%x\r\n%s\r\n" % (len(chunk), chunk))
-                        if not self.client_gone:
-                            self.wfile.flush()
+                        self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+                        self.wfile.flush()
                     except TimeoutError:
                         # Timeout during streaming, return what we have so far
                         break
@@ -76,13 +103,8 @@ def make_handler(upstream, out):
                     resp.close()
 
         def _finish(self):
-            self._send(b"0\r\n\r\n")
-            if not self.client_gone:
-                try:
-                    self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
-                    self.client_gone = True
-                    self.close_connection = True
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
 
         def do_POST(self):
             body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
