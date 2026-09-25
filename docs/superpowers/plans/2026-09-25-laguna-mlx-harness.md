@@ -705,8 +705,8 @@ convert(a.hf, mlx_path=a.out, quantize=True, q_bits=4, q_group_size=64)
 
 ```bash
 df -h ~ | tail -1   # need > 90 GB free
-hf download poolside/Laguna-XS-2.1 --include "*.safetensors" "model.safetensors.index.json" \
-  --local-dir models/Laguna-XS-2.1
+hf download poolside/Laguna-XS-2.1 --include "*.safetensors" --local-dir models/Laguna-XS-2.1
+# (index json already fetched separately; a positional filename makes hf ignore --include)
 ```
 
 - [ ] **Step 3: Convert, watching peak RSS**
