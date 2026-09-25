@@ -33,6 +33,26 @@ def post(url, body):
     return urllib.request.urlopen(urllib.request.Request(url, body, {"Content-Type": "application/json"}))
 
 
+def wait_for_log_lines(log_path, expected_count, timeout=1.0):
+    """Poll log file until we have expected number of lines."""
+    import time
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            lines = log_path.read_text().splitlines()
+            if len(lines) == expected_count:
+                return [json.loads(l) for l in lines]
+        except FileNotFoundError:
+            pass
+        time.sleep(0.01)
+    # Timeout, return what we have
+    try:
+        lines = log_path.read_text().splitlines()
+        return [json.loads(l) for l in lines]
+    except FileNotFoundError:
+        return []
+
+
 def test_forwards_stream_logs_requests_and_errors(tmp_path):
     up = serve(Upstream)
     log = tmp_path / "t.jsonl"
@@ -47,11 +67,11 @@ def test_forwards_stream_logs_requests_and_errors(tmp_path):
     except urllib.error.HTTPError as e:
         assert e.code == 500
 
-    time.sleep(0.1)  # Give server time to write log
-    lines = [json.loads(l) for l in log.read_text().splitlines()]
+    lines = wait_for_log_lines(log, 2)
     assert [l["status"] for l in lines] == [200, 500]
     assert lines[0]["request"]["messages"][0]["content"] == "hi"
-    assert "[DONE]" in lines[0]["response"]
+    assert "[DONE]" in lines[0]["response"]  # Verify real upstream response, not error message
+    assert "[DONE]" in lines[1]["response"]  # 500 error path also has real response
 
 
 def test_unreachable_upstream_returns_502_and_logs(tmp_path):
@@ -62,7 +82,8 @@ def test_unreachable_upstream_returns_502_and_logs(tmp_path):
         raise AssertionError("expected HTTPError")
     except urllib.error.HTTPError as e:
         assert e.code == 502
-    assert json.loads(log.read_text())["status"] == 502
+    lines = wait_for_log_lines(log, 1)
+    assert lines[0]["status"] == 502
 
 
 def test_client_disconnect_mid_stream_still_logs(tmp_path):
@@ -81,12 +102,9 @@ def test_client_disconnect_mid_stream_still_logs(tmp_path):
     # Close immediately without reading response (simulate client crash)
     sock.close()
 
-    # Give server time to process and log
-    time.sleep(0.1)
-
-    # Verify log has exactly one entry with the request and status
-    lines = [json.loads(l) for l in log.read_text().splitlines()]
+    # Verify log has exactly one entry with the request and real upstream status (200, not fabricated 500)
+    lines = wait_for_log_lines(log, 1)
     assert len(lines) == 1
-    assert lines[0]["status"] == 200
+    assert lines[0]["status"] == 200  # Real upstream status, not fabricated 500
     assert lines[0]["request"]["messages"][0]["content"] == "test"
-    assert "data:" in lines[0]["response"]
+    assert "[DONE]" in lines[0]["response"]  # Real upstream response, complete

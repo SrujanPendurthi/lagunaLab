@@ -15,6 +15,17 @@ HOP = {"host", "content-length", "transfer-encoding", "connection"}
 def make_handler(upstream, out):
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
+        client_gone = False
+
+        def _send(self, data):
+            """Send data to client; set client_gone and close_connection if client is unreachable."""
+            if self.client_gone:
+                return
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                self.client_gone = True
+                self.close_connection = True
 
         def _relay(self, body):
             """Forward, stream the body back as chunks, return (status, raw bytes). No terminator."""
@@ -24,66 +35,59 @@ def make_handler(upstream, out):
                 resp = urllib.request.urlopen(req, timeout=600)
             except urllib.error.HTTPError as e:
                 resp = e
-            except (socket.timeout, TimeoutError):
+            except TimeoutError:
                 msg = b"proxy: upstream timeout"
-                try:
-                    self.send_response(504)
-                    self.send_header("Transfer-Encoding", "chunked")
-                    self.end_headers()
-                    self.wfile.write(b"%x\r\n%s\r\n" % (len(msg), msg))
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
+                self.send_response(504)
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                self._send(b"%x\r\n%s\r\n" % (len(msg), msg))
                 return 504, msg
             except urllib.error.URLError as e:
                 msg = f"proxy: upstream unreachable: {e.reason}".encode()
-                try:
-                    self.send_response(502)
-                    self.send_header("Transfer-Encoding", "chunked")
-                    self.end_headers()
-                    self.wfile.write(b"%x\r\n%s\r\n" % (len(msg), msg))
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
+                self.send_response(502)
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                self._send(b"%x\r\n%s\r\n" % (len(msg), msg))
                 return 502, msg
-            self.send_response(resp.status)
-            for k, v in resp.headers.items():
-                if k.lower() not in HOP:
-                    self.send_header(k, v)
-            self.send_header("Transfer-Encoding", "chunked")
-            self.end_headers()
-            read = getattr(resp, "read1", resp.read)
-            chunks = []
-            while True:
-                try:
-                    chunk = read(65536)
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
+            try:
+                self.send_response(resp.status)
+                for k, v in resp.headers.items():
+                    if k.lower() not in HOP:
+                        self.send_header(k, v)
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                read = getattr(resp, "read1", resp.read)
+                chunks = []
+                while True:
                     try:
-                        self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
-                        self.wfile.flush()
-                    except (BrokenPipeError, ConnectionResetError):
-                        # Client disconnected, but keep reading upstream to get complete response
-                        pass
-                except (socket.timeout, TimeoutError):
-                    # Timeout during streaming, return what we have so far
-                    break
-            return resp.status, b"".join(chunks)
+                        chunk = read(65536)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        self._send(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+                        if not self.client_gone:
+                            self.wfile.flush()
+                    except TimeoutError:
+                        # Timeout during streaming, return what we have so far
+                        break
+                return resp.status, b"".join(chunks)
+            finally:
+                if hasattr(resp, 'close'):
+                    resp.close()
 
         def _finish(self):
-            try:
-                self.wfile.write(b"0\r\n\r\n")
-                self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
-                pass
+            self._send(b"0\r\n\r\n")
+            if not self.client_gone:
+                try:
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    self.client_gone = True
+                    self.close_connection = True
 
         def do_POST(self):
             body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
             try:
-                try:
-                    status, raw = self._relay(body)
-                except (BrokenPipeError, ConnectionResetError):
-                    # Client disconnected during relay, but still log the attempt
-                    status, raw = 500, b"Client disconnected"
+                status, raw = self._relay(body)
                 try:
                     request = json.loads(body)
                 except ValueError:
