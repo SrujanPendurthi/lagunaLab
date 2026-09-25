@@ -86,20 +86,43 @@ def score():
         ids, gen, top5 = row["prompt_ids"], row["gen"], row["top5"]
         logits = model(mx.array([ids + gen]))[0, len(ids) - 1: len(ids) - 1 + len(gen)]
         pred = np.array(mx.argmax(logits, axis=-1)).tolist()
+        # llama-server build 10964 has a Laguna short-prompt bug: for ~36-512 token
+        # prompts it returns a constant token (id 31) with a fixed top5 at every
+        # position, regardless of context. Flag that so a broken reference isn't
+        # read as an MLX failure.
+        ref_degenerate = len(set(gen)) == 1 and len({tuple(t) for t in top5}) == 1
         out = {
             "label": row["label"],
             "prompt_tokens": len(ids),
             "top1": float(np.mean([a == b for a, b in zip(pred, gen)])),
             "in_top5": float(np.mean([a in t for a, t in zip(pred, top5)])),
+            "ref_degenerate": ref_degenerate,
         }
         rows.append(out)
         print(out)
-    summary = {"top1": float(np.mean([r["top1"] for r in rows])),
-               "in_top5": float(np.mean([r["in_top5"] for r in rows])), "rows": rows}
+    valid = [r for r in rows if not r["ref_degenerate"]]
+    summary = {
+        "top1": float(np.mean([r["top1"] for r in rows])),
+        "in_top5": float(np.mean([r["in_top5"] for r in rows])),
+        "valid_rows": len(valid),
+        "top1_valid": float(np.mean([r["top1"] for r in valid])) if valid else None,
+        "in_top5_valid": float(np.mean([r["in_top5"] for r in valid])) if valid else None,
+        "note": ("Rows with ref_degenerate=true come from llama.cpp build 10964's Laguna "
+                 "short-prompt bug: the reference /completion response returns a constant "
+                 "token (id 31) with null logprobs and an identical top5 at every position "
+                 "for prompts in roughly the 36-512 token range, independent of prompt "
+                 "content. top1/in_top5 are over all rows (raw); top1_valid/in_top5_valid "
+                 "exclude those degenerate-reference rows and are the metrics the 0.95/0.99 "
+                 "gate is asserted against."),
+        "rows": rows,
+    }
     PARITY_OUT.parent.mkdir(parents=True, exist_ok=True)
     PARITY_OUT.write_text(json.dumps(summary, indent=1))
-    print("top1", summary["top1"], "in_top5", summary["in_top5"])
-    assert summary["top1"] >= 0.95 and summary["in_top5"] >= 0.99, "parity gate failed"
+    print("raw: top1", summary["top1"], "in_top5", summary["in_top5"])
+    print("valid_rows", summary["valid_rows"], "top1_valid", summary["top1_valid"],
+          "in_top5_valid", summary["in_top5_valid"])
+    assert summary["valid_rows"] >= 1, "parity gate failed: no rows with a non-degenerate reference"
+    assert summary["top1_valid"] >= 0.95 and summary["in_top5_valid"] >= 0.99, "parity gate failed"
 
 
 def main():
