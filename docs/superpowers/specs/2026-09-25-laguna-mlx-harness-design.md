@@ -166,3 +166,45 @@ memory), and set `mx.set_wired_limit` in every benchmark and replay entry
 point. The best chunk becomes the default in replay and DFlash prefill.
 
 Outputs: `results/dflash.json`, `results/inference_opt.json`.
+
+---
+
+# Addendum 2 (2026-09-25): SSD expert streaming (TurboFieldfare-style)
+
+Motivation: 4-bit Laguna XS is ~18.6 GB on a 24 GB unified-memory Mac, leaving
+macOS ~3 GB while it runs. Inspired by TurboFieldfare (drumih/turbo-fieldfare:
+Gemma 4 26B-A4B in ~2 GB by streaming routed experts from SSD), keep only
+common weights resident and stream routed experts on demand. Same bits, same
+weights: lossless.
+
+Sizes (estimates from config, 4-bit g64): resident (attention, shared experts,
+dense layer 0, embeddings, lm_head, norms, routers) ~1.2 GB; routed experts
+39 layers x 256 x ~1.8 MB ~ 17.4 GB on SSD.
+
+Components:
+1. **Pack** (`scripts/pack_experts.py`): from the MLX 4-bit model dir, write
+   `resident.safetensors` (everything except `switch_mlp`), one
+   `experts/layer_XX.bin` per MoE layer (256 fixed-stride, 16 KiB-aligned expert
+   blobs: gate/up/down x weight/scales/biases), `layout.json`, config and
+   tokenizer files. Values copied unchanged, never requantized.
+2. **Expert store + streaming MoE** (`laguna_mlx/streaming.py`): per layer, a
+   fixed number of in-memory slots (a quantized `SwitchGLU` sized to `slots`),
+   LFU eviction with recency tie-break, parallel `os.pread` for misses. A call
+   maps routed expert ids to slots; if a call needs more distinct experts than
+   slots (prefill), it processes the experts in groups and sums masked partial
+   outputs. Counters: hits, misses, bytes read.
+3. **Loader** `load_streaming(pack_dir, slots)`: builds the model lazily,
+   quantizes structure from `config["quantization"]`, swaps every
+   `mlp.switch_mlp` for the streaming module before any evaluation, loads
+   resident weights strictly.
+4. **Benchmark**: decode and prefill tok/s, hit rate, peak memory across slot
+   budgets {16, 32, 64, 128} per layer (~1.1 / 2.2 / 4.4 / 8.8 GB of experts)
+   vs fully resident; greedy outputs must match resident.
+
+Correctness: on the tiny config (4-bit, 3 slots < 8 experts so grouping is
+exercised) streaming logits equal resident quantized logits.
+
+Out of scope now: custom Metal kernels, prefetch/speculative expert loading,
+streaming under DFlash (measure later).
+
+Outputs: `results/streaming.json`.

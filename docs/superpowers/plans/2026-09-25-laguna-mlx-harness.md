@@ -2369,3 +2369,486 @@ python3 -m pytest -q
 git add -A scripts/bench_decode.py results/inference_opt.json laguna_mlx replay
 git commit -m "perf: decode/prefill measurements and tuned defaults"
 ```
+
+---
+
+## Addendum 2: SSD expert streaming (Tasks 16–18)
+
+Spec: "Addendum 2 (2026-09-25): SSD expert streaming" in the spec file. Tasks 16–17 use only the tiny config; Task 18 needs the converted model (Task 4).
+
+Additional Review Focus:
+- **A prefill chunk that needs more distinct experts than there are slots** — must give the same logits as resident, not crash or silently drop experts. Pinned in Task 17 (3 slots, 8 experts).
+- **bf16 scales/biases round-tripping through raw bytes** (numpy has no bf16) — must be bit-exact. Pinned in Task 16.
+
+### Task 16: Pack experts into per-layer files
+
+**Files:**
+- Create: `scripts/pack_experts.py`
+- Test: `tests/test_streaming.py` (pack part)
+
+**Interfaces:**
+- Consumes: an MLX model dir (`config.json` with `"quantization"`, `*.safetensors`, tokenizer files).
+- Produces: `pack(model_dir, out_dir)` writing `resident.safetensors`, `experts/layer_XX.bin`, `layout.json` = `{"num_experts": E, "stride": int, "layers": [int], "arrays": {name: {"offset": int, "shape": [..], "dtype": "uint32"|"bfloat16"|"float32"|"float16"}}}` where `name` is e.g. `gate_proj.weight`; `read_expert(out_dir, layout, layer, e) -> dict[name, mx.array]`. Tests helper `tests.tiny.quantized_model_dir(tmp_path) -> Path`.
+
+- [ ] **Step 1: Add the tiny quantized model dir helper to `tests/tiny.py`**
+
+```python
+def quantized_model_dir(tmp_path, seed=0):
+    """Tiny 4-bit model saved like an mlx-lm model dir; returns (dir, model)."""
+    import json
+
+    import mlx.nn as nn
+    from mlx.utils import tree_flatten
+
+    m = mlx_model(torch_model(seed))
+    nn.quantize(m, group_size=32, bits=4)
+    mx.eval(m.parameters())
+    d = tmp_path / "tiny-4bit"
+    d.mkdir()
+    mx.save_safetensors(str(d / "model.safetensors"), dict(tree_flatten(m.parameters())))
+    (d / "config.json").write_text(json.dumps({**TINY, "quantization": {"group_size": 32, "bits": 4}}))
+    return d, m
+```
+
+- [ ] **Step 2: Write the failing test `tests/test_streaming.py`**
+
+```python
+import json
+
+import mlx.core as mx
+import numpy as np
+
+from scripts.pack_experts import pack, read_expert
+from tests.tiny import TINY, quantized_model_dir
+
+
+def test_pack_roundtrips_every_expert_bit_exact(tmp_path):
+    d, m = quantized_model_dir(tmp_path)
+    out = tmp_path / "packed"
+    pack(d, out)
+    layout = json.loads((out / "layout.json").read_text())
+    assert layout["layers"] == [1, 2, 3] and layout["stride"] % 16384 == 0
+    for l in layout["layers"]:
+        sw = m.layers[l].mlp.switch_mlp
+        for e in range(TINY["num_experts"]):
+            got = read_expert(out, layout, l, e)
+            for proj in ("gate_proj", "up_proj", "down_proj"):
+                for part in ("weight", "scales", "biases"):
+                    want = getattr(getattr(sw, proj), part)[e]
+                    have = got[f"{proj}.{part}"]
+                    assert have.dtype == want.dtype
+                    assert mx.array_equal(have, want).item(), (l, e, proj, part)
+    resident = mx.load(str(out / "resident.safetensors"))
+    assert not any("switch_mlp" in k for k in resident)
+    assert "model.layers.1.mlp.gate.weight" in resident
+```
+
+- [ ] **Step 3: Run to see it fail**
+
+Run: `python3 -m pytest tests/test_streaming.py -q`
+Expected: `ModuleNotFoundError: No module named 'scripts.pack_experts'`
+
+- [ ] **Step 4: Implement `scripts/pack_experts.py`**
+
+```python
+"""Split an MLX Laguna checkpoint into resident weights + per-layer expert files.
+
+python3 scripts/pack_experts.py [--model models/Laguna-XS-2.1-mlx-4bit] [--out models/Laguna-XS-2.1-packed]
+Values are copied byte for byte; nothing is dequantized or requantized.
+"""
+import argparse
+import glob
+import json
+import re
+import shutil
+from pathlib import Path
+
+import mlx.core as mx
+import numpy as np
+
+PAGE = 16384
+PROJS = ("gate_proj", "up_proj", "down_proj")
+PARTS = ("weight", "scales", "biases")
+NP_VIEW = {"uint32": (mx.uint32, np.uint32), "bfloat16": (mx.uint16, np.uint16),
+           "float16": (mx.float16, np.float16), "float32": (mx.float32, np.float32)}
+KEY = re.compile(r"model\.layers\.(\d+)\.mlp\.switch_mlp\.(\w+)\.(weight|scales|biases)$")
+
+
+def _dtype_name(a):
+    return str(a.dtype).replace("mlx.core.", "")
+
+
+def _to_bytes(a):
+    view, _ = NP_VIEW[_dtype_name(a)]
+    return np.array(a.view(view)).tobytes()
+
+
+def pack(model_dir, out_dir):
+    model_dir, out_dir = Path(model_dir), Path(out_dir)
+    (out_dir / "experts").mkdir(parents=True, exist_ok=True)
+    weights = {}
+    for f in sorted(glob.glob(str(model_dir / "*.safetensors"))):
+        weights.update(mx.load(f))
+    layers = sorted({int(m.group(1)) for k in weights if (m := KEY.match(k))})
+    first = f"model.layers.{layers[0]}.mlp.switch_mlp"
+    E = weights[f"{first}.gate_proj.weight"].shape[0]
+    arrays, offset = {}, 0
+    for proj in PROJS:
+        for part in PARTS:
+            a = weights[f"{first}.{proj}.{part}"][0]
+            arrays[f"{proj}.{part}"] = {"offset": offset, "shape": list(a.shape), "dtype": _dtype_name(a)}
+            offset += a.nbytes
+    stride = -(-offset // PAGE) * PAGE
+    for l in layers:
+        p = f"model.layers.{l}.mlp.switch_mlp"
+        stacked = {n: weights.pop(f"{p}.{n}") for n in arrays}
+        with open(out_dir / "experts" / f"layer_{l:02d}.bin", "wb") as f:
+            for e in range(E):
+                blob = b"".join(_to_bytes(stacked[n][e]) for n in arrays)
+                f.write(blob + b"\0" * (stride - len(blob)))
+        del stacked
+    mx.save_safetensors(str(out_dir / "resident.safetensors"), weights)
+    layout = {"num_experts": E, "stride": stride, "layers": layers, "arrays": arrays}
+    (out_dir / "layout.json").write_text(json.dumps(layout, indent=1))
+    for f in model_dir.iterdir():
+        if f.suffix in (".json", ".jinja") and f.name != "model.safetensors.index.json":
+            shutil.copy(f, out_dir / f.name)
+
+
+def expert_from_bytes(buf, layout):
+    out = {}
+    for name, a in layout["arrays"].items():
+        mxv, npv = NP_VIEW[a["dtype"]]
+        count = int(np.prod(a["shape"]))
+        arr = np.frombuffer(buf, dtype=npv, count=count, offset=a["offset"]).reshape(a["shape"])
+        out[name] = mx.array(arr).view(getattr(mx, a["dtype"]))
+    return out
+
+
+def read_expert(out_dir, layout, layer, e):
+    with open(Path(out_dir) / "experts" / f"layer_{layer:02d}.bin", "rb") as f:
+        f.seek(e * layout["stride"])
+        return expert_from_bytes(f.read(layout["stride"]), layout)
+
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser()
+    p.add_argument("--model", default="models/Laguna-XS-2.1-mlx-4bit")
+    p.add_argument("--out", default="models/Laguna-XS-2.1-packed")
+    a = p.parse_args()
+    pack(a.model, a.out)
+```
+
+- [ ] **Step 5: Run the test**
+
+Run: `python3 -m pytest tests/test_streaming.py -q`
+Expected: 1 passed.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add scripts/pack_experts.py tests/test_streaming.py tests/tiny.py
+git commit -m "feat: pack routed experts into per-layer files"
+```
+
+---
+
+### Task 17: Streaming expert store and loader
+
+**Files:**
+- Create: `laguna_mlx/streaming.py`
+- Modify: `tests/test_streaming.py` (add tests)
+
+**Interfaces:**
+- Consumes: `pack`, `expert_from_bytes` (Task 16); `laguna.Model`, `laguna.ModelArgs` (Task 1).
+- Produces: `ExpertStore(pack_dir, layout, layer, slots, group_size, bits)` with `.hits`, `.misses`, `.bytes_read`; `StreamingSwitchGLU(store)` (`__call__(x, indices) -> [..., k, hidden]`, same contract as mlx-lm `SwitchGLU`); `load_streaming(pack_dir, slots) -> (model, tokenizer_or_None)`; `stream_stats(model) -> dict` with `hits, misses, hit_rate, bytes_read`.
+
+- [ ] **Step 1: Add failing tests to `tests/test_streaming.py`**
+
+```python
+from laguna_mlx.streaming import load_streaming, stream_stats
+
+
+def _ids(n, seed=6):
+    return mx.array(np.random.default_rng(seed).integers(0, TINY["vocab_size"], size=(1, n)))
+
+
+def test_streaming_matches_resident_with_fewer_slots_than_experts(tmp_path):
+    d, resident = quantized_model_dir(tmp_path)
+    out = tmp_path / "packed"
+    pack(d, out)
+    streamed, _ = load_streaming(out, slots=3)  # 3 < 8 experts: prefill must group
+    ids = _ids(20)
+    np.testing.assert_allclose(np.array(streamed(ids)), np.array(resident(ids)), atol=1e-5, rtol=1e-5)
+    s = stream_stats(streamed)
+    assert s["misses"] > 0 and s["bytes_read"] > 0
+
+
+def test_streaming_decode_with_cache_matches_resident(tmp_path):
+    d, resident = quantized_model_dir(tmp_path)
+    out = tmp_path / "packed"
+    pack(d, out)
+    streamed, _ = load_streaming(out, slots=4)
+    ids = _ids(16, seed=7)
+    want = np.array(resident(ids))
+    cache = streamed.make_cache()
+    got = [np.array(streamed(ids[:, :10], cache=cache))]
+    got += [np.array(streamed(ids[:, i : i + 1], cache=cache)) for i in range(10, 16)]
+    np.testing.assert_allclose(np.concatenate(got, axis=1), want, atol=1e-5, rtol=1e-5)
+    assert stream_stats(streamed)["hits"] > 0  # decode reuses cached experts
+```
+
+- [ ] **Step 2: Run to see them fail**
+
+Run: `python3 -m pytest tests/test_streaming.py -q`
+Expected: `ModuleNotFoundError: No module named 'laguna_mlx.streaming'`
+
+- [ ] **Step 3: Implement `laguna_mlx/streaming.py`**
+
+```python
+"""Stream routed experts from SSD into a fixed number of in-memory slots per layer.
+
+Same bits, same weights as the resident model: output is identical.
+Design after TurboFieldfare (drumih/turbo-fieldfare): resident common weights,
+per-layer expert files, LFU slot cache with recency tie-break, parallel preads.
+"""
+import json
+import os
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import mlx.core as mx
+import mlx.nn as nn
+import numpy as np
+from mlx_lm.models.switch_layers import SwitchGLU
+
+from laguna_mlx import laguna
+from scripts.pack_experts import expert_from_bytes
+
+_POOL = ThreadPoolExecutor(8)
+
+
+class ExpertStore:
+    """Slots for one layer: a quantized SwitchGLU with `slots` experts, refilled from disk."""
+
+    def __init__(self, pack_dir, layout, layer, slots, group_size, bits, hidden, inter):
+        self.layout, self.slots = layout, slots
+        self.fd = os.open(Path(pack_dir) / "experts" / f"layer_{layer:02d}.bin", os.O_RDONLY)
+        glu = SwitchGLU(hidden, inter, slots)
+        nn.quantize(glu, group_size=group_size, bits=bits)
+        self.glu = glu
+        self.slot_expert = [-1] * slots
+        self.expert_slot = {}
+        E = layout["num_experts"]
+        self.freq, self.last = np.zeros(E, np.int64), np.zeros(E, np.int64)
+        self.clock = 0
+        self.hits = self.misses = self.bytes_read = 0
+
+    def _read(self, e):
+        s = self.layout["stride"]
+        return e, os.pread(self.fd, s, e * s)
+
+    def _victims(self, n, keep):
+        free = [i for i, e in enumerate(self.slot_expert) if e == -1]
+        used = [i for i, e in enumerate(self.slot_expert) if e != -1 and e not in keep]
+        used.sort(key=lambda i: (self.freq[self.slot_expert[i]], self.last[self.slot_expert[i]]))
+        return (free + used)[:n]
+
+    def load(self, experts):
+        """Make every expert in `experts` (len <= slots) resident; return {expert: slot}."""
+        self.clock += 1
+        keep = set(experts)
+        missing = [e for e in experts if e not in self.expert_slot]
+        self.hits += len(experts) - len(missing)
+        self.misses += len(missing)
+        self.freq[list(experts)] += 1
+        self.last[list(experts)] = self.clock
+        if missing:
+            for slot, (e, buf) in zip(self._victims(len(missing), keep), _POOL.map(self._read, missing)):
+                old = self.slot_expert[slot]
+                if old != -1:
+                    del self.expert_slot[old]
+                self.slot_expert[slot], self.expert_slot[e] = e, slot
+                self.bytes_read += len(buf)
+                for name, arr in expert_from_bytes(buf, self.layout).items():
+                    proj, part = name.split(".")
+                    getattr(getattr(self.glu, proj), part)[slot] = arr
+        return {e: self.expert_slot[e] for e in experts}
+
+
+class StreamingSwitchGLU(nn.Module):
+    def __init__(self, store):
+        super().__init__()
+        self._store = [store]  # list: keeps the store out of the parameter tree
+
+    def __call__(self, x, indices):
+        store = self._store[0]
+        idx = np.array(indices)
+        experts = np.unique(idx).tolist()
+        out = None
+        # ponytail: a prefill chunk needing > slots experts runs several masked passes
+        for g in range(0, len(experts), store.slots):
+            group = experts[g : g + store.slots]
+            table = np.zeros(store.layout["num_experts"], np.int32)
+            member = np.zeros(store.layout["num_experts"], bool)
+            for e, s in store.load(group).items():
+                table[e], member[e] = s, True
+            y = store.glu(x, mx.array(table[idx]))
+            if len(experts) > store.slots:
+                y = y * mx.array(member[idx])[..., None].astype(y.dtype)
+            out = y if out is None else out + y
+        return out
+
+
+def load_streaming(pack_dir, slots):
+    from mlx_lm.utils import load_tokenizer
+
+    pack_dir = Path(pack_dir)
+    config = json.loads((pack_dir / "config.json").read_text())
+    layout = json.loads((pack_dir / "layout.json").read_text())
+    q = config["quantization"]
+    model = laguna.Model(laguna.ModelArgs.from_dict(config))  # lazy: never evaluated before the swap
+
+    def predicate(p, m):
+        if p in q:
+            return q[p]
+        return hasattr(m, "to_quantized") and "switch_mlp" not in p
+
+    nn.quantize(model, group_size=q["group_size"], bits=q["bits"], class_predicate=predicate)
+    a = model.args
+    for l in layout["layers"]:
+        mlp = model.layers[l].mlp
+        mlp.switch_mlp = StreamingSwitchGLU(ExpertStore(
+            pack_dir, layout, l, slots, q["group_size"], q["bits"], a.hidden_size, a.moe_intermediate_size))
+    model.load_weights(str(pack_dir / "resident.safetensors"), strict=True)
+    mx.eval(model.parameters())
+    tok = load_tokenizer(pack_dir) if (pack_dir / "tokenizer.json").exists() else None
+    return model, tok
+
+
+def stream_stats(model):
+    stores = [l.mlp.switch_mlp._store[0] for l in model.layers
+              if isinstance(getattr(l.mlp, "switch_mlp", None), StreamingSwitchGLU)]
+    hits = sum(s.hits for s in stores)
+    misses = sum(s.misses for s in stores)
+    return {"hits": hits, "misses": misses, "hit_rate": hits / max(1, hits + misses),
+            "bytes_read": sum(s.bytes_read for s in stores)}
+```
+
+Notes for the implementer:
+- The streaming store's slot arrays live in `store.glu`, which is inside a Python list, so `load_weights(strict=True)` sees only resident parameters. If mlx `nn.Module` registers lists of non-modules as parameters anyway, use `object.__setattr__(self, "_store", store)` instead and adjust `stream_stats`.
+- `nn.quantize` on the full-size model's `SwitchGLU` would materialize ~17 GB if evaluated; the predicate skips `switch_mlp` so it is never quantized, and it is replaced before `mx.eval`. Confirm peak memory stays small in Task 18.
+- The real model's router gate is 8-bit via a per-path entry in `config["quantization"]`; the predicate honors it.
+
+- [ ] **Step 4: Run tests**
+
+Run: `python3 -m pytest tests/test_streaming.py -q`
+Expected: 3 passed. If the grouped (3-slot) test fails but the 4-slot decode test passes, the masked-sum path is wrong: each (token, k) pair must be counted in exactly one group.
+
+- [ ] **Step 5: Full suite and commit**
+
+```bash
+python3 -m pytest -q
+git add laguna_mlx/streaming.py tests/test_streaming.py
+git commit -m "feat: SSD expert streaming with LFU slot cache"
+```
+
+---
+
+### Task 18: Streaming on real weights — memory vs speed
+
+**Files:**
+- Create: `scripts/bench_stream.py`
+- Output: `results/streaming.json`
+
+**Interfaces:**
+- Consumes: `pack` CLI (Task 16), `load_streaming`, `stream_stats` (Task 17), `generate_greedy` (Task 13), `PROMPTS` (Task 5).
+
+- [ ] **Step 1: Pack the real model (~18 GB more disk)**
+
+```bash
+df -h ~ | tail -1   # need > 25 GB free
+python3 scripts/pack_experts.py
+du -sh models/Laguna-XS-2.1-packed; ls models/Laguna-XS-2.1-packed/experts | wc -l   # expect 39 files
+```
+
+- [ ] **Step 2: Write `scripts/bench_stream.py`**
+
+```python
+"""Decode/prefill speed, hit rate and memory across expert-slot budgets.
+
+python3 scripts/bench_stream.py [--slots 16 32 64 128] [--resident]
+"""
+import argparse
+import json
+import resource
+import time
+from pathlib import Path
+
+import mlx.core as mx
+import numpy as np
+
+import laguna_mlx  # noqa: F401
+from laguna_mlx.dflash import generate_greedy
+from laguna_mlx.streaming import load_streaming, stream_stats
+from scripts.check_parity import PROMPTS
+
+p = argparse.ArgumentParser()
+p.add_argument("--slots", type=int, nargs="+", default=[16, 32, 64, 128])
+p.add_argument("--resident", action="store_true", help="also run the fully resident model")
+p.add_argument("--max-tokens", type=int, default=128)
+a = p.parse_args()
+PACK = "models/Laguna-XS-2.1-packed"
+
+
+def run(model, tok, label):
+    prompts = [tok.apply_chat_template([{"role": "user", "content": q}], add_generation_prompt=True,
+                                       enable_thinking=False) for q in PROMPTS[:3]]
+    mx.reset_peak_memory()
+    outs, t0 = [], time.perf_counter()
+    for pr in prompts:
+        outs.append(generate_greedy(model, pr, a.max_tokens, tuple(tok.eos_token_ids)))
+    decode = sum(map(len, outs)) / (time.perf_counter() - t0)
+    ids = np.random.default_rng(0).integers(1000, 50000, size=4096).tolist()
+    cache = model.make_cache()
+    t0 = time.perf_counter()
+    for i in range(0, len(ids), 1024):
+        mx.eval(model(mx.array([ids[i : i + 1024]]), cache=cache))
+    prefill = len(ids) / (time.perf_counter() - t0)
+    row = {"label": label, "decode_tok_s": decode, "prefill_tok_s": prefill,
+           "peak_gpu_gb": mx.get_peak_memory() / 1e9,
+           "max_rss_gb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e9}
+    print(row, flush=True)
+    return row, outs
+
+
+rows, ref = [], None
+if a.resident:
+    from mlx_lm import load
+    m, tok = load("models/Laguna-XS-2.1-mlx-4bit")
+    row, ref = run(m, tok, "resident")
+    rows.append(row)
+    del m
+    mx.clear_cache()
+for s in a.slots:
+    m, tok = load_streaming(PACK, s)
+    row, outs = run(m, tok, f"slots={s}")
+    row.update(slots=s, **stream_stats(m))
+    if ref is not None:
+        row["identical_frac"] = float(np.mean([x == y for x, y in zip(outs, ref)]))
+    rows.append(row)
+    del m
+    mx.clear_cache()
+Path("results/streaming.json").write_text(json.dumps({"rows": rows}, indent=1))
+```
+
+- [ ] **Step 3: Run**
+
+Run: `python3 scripts/bench_stream.py --resident`
+Expected: `results/streaming.json` with 5 rows. `identical_frac` == 1.0 for every slot budget (same kernels, same weights; any mismatch is a bug). `max_rss_gb` for `slots=16` should be a few GB, far below resident. Note that macOS's file cache makes repeated runs faster; say so in the report and record the first (cold) run separately if the numbers differ a lot.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add scripts/bench_stream.py results/streaming.json && git commit -m "feat: expert streaming benchmark on real weights"
+```
