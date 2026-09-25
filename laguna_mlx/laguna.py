@@ -172,7 +172,7 @@ class LagunaModel(nn.Module):
         self.layer_types = args.layer_types
         self.sliding_window = args.sliding_window
 
-    def __call__(self, inputs, cache=None):
+    def __call__(self, inputs, cache=None, capture=None):
         h = self.embed_tokens(inputs)
         if cache is None:
             cache = [None] * len(self.layers)
@@ -181,8 +181,10 @@ class LagunaModel(nn.Module):
             if lt not in masks:
                 window = self.sliding_window if lt == "sliding_attention" else None
                 masks[lt] = create_attention_mask(h, c, window_size=window)
-        for layer, lt, c in zip(self.layers, self.layer_types, cache):
+        for i, (layer, lt, c) in enumerate(zip(self.layers, self.layer_types, cache)):
             h = layer(h, masks[lt], c)
+            if capture is not None and i in capture:
+                capture[i] = h
         return self.norm(h)
 
 
