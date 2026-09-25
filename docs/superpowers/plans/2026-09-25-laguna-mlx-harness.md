@@ -1705,3 +1705,667 @@ git add mlx_lm/models/laguna.py tests/test_models.py
 git commit -m "Add Poolside Laguna (XS 2.1 / S 2.1 / M.1)"
 ```
 Then ask the human to approve pushing and opening the PR. The PR body cites `results/parity.json` numbers (exact on tiny config vs Poolside's PyTorch code; top-1 agreement vs llama.cpp on real weights).
+
+---
+
+## Addendum: inference optimization (Tasks 12–15)
+
+Spec: "Addendum (2026-09-25): inference optimization" in the spec file. Execute after Task 10.
+
+Additional Review Focus for this addendum:
+- **Rejected drafts after the sliding window has wrapped** (context > 512) — trimming must leave caches exactly as if the rejected tokens were never fed. Pinned in Task 12.
+- **EOS inside an accepted draft run, and `max_tokens` landing mid-block** — generation must stop at the same token plain greedy stops at. Pinned in Task 13.
+
+### Task 12: Trimmable sliding-window cache and hidden-state capture
+
+**Files:**
+- Create: `laguna_mlx/cache.py`
+- Modify: `laguna_mlx/laguna.py` (`LagunaModel.__call__` gains `capture=None`)
+- Test: `tests/test_spec_cache.py`
+
+**Interfaces:**
+- Produces: `TrimmableWindowCache(window: int, slack: int = 64)` with `update_and_fetch`, `make_mask`, `offset`, `is_trimmable() -> True`, `trim(n) -> int`, `nbytes`; `make_trimmable_cache(model) -> list` (KVCache for full layers, TrimmableWindowCache for sliding); `LagunaModel.__call__(inputs, cache=None, capture: dict[int, Any] | None = None)` fills `capture[i]` with the output of layer `i` for each key present.
+
+- [ ] **Step 1: Write the failing tests `tests/test_spec_cache.py`**
+
+```python
+import mlx.core as mx
+import numpy as np
+
+from laguna_mlx.cache import TrimmableWindowCache, make_trimmable_cache
+from tests.tiny import TINY, mlx_model, torch_model
+
+
+def _ids(n, seed=4):
+    return mx.array(np.random.default_rng(seed).integers(0, TINY["vocab_size"], size=(1, n)))
+
+
+def _cache(model):
+    # slack 4 with window 8, so truncation happens constantly in a 30-token test
+    return [TrimmableWindowCache(8, slack=4) if isinstance(c, TrimmableWindowCache) else c
+            for c in make_trimmable_cache(model)]
+
+
+def test_decode_matches_full_forward_with_truncation():
+    m = mlx_model(torch_model())
+    ids = _ids(30)
+    full = np.array(m(ids))
+    cache = _cache(m)
+    outs = [np.array(m(ids[:, a:b], cache=cache))
+            for a, b in [(0, 5), (5, 12), (12, 13)] + [(i, i + 1) for i in range(13, 30)]]
+    np.testing.assert_allclose(np.concatenate(outs, axis=1), full, atol=1e-4, rtol=1e-3)
+
+
+def test_trim_after_window_wrap_forgets_rejected_tokens():
+    m = mlx_model(torch_model())
+    ids = _ids(30)
+    full = np.array(m(ids))
+    cache = _cache(m)
+    m(ids[:, :20], cache=cache)
+    m(_ids(5, seed=99), cache=cache)  # "rejected draft"
+    for c in cache:
+        assert c.trim(5) == 5
+    out = np.array(m(ids[:, 20:], cache=cache))
+    np.testing.assert_allclose(out, full[:, 20:], atol=1e-4, rtol=1e-3)
+
+
+def test_capture_returns_requested_layer_outputs():
+    m = mlx_model(torch_model())
+    cap = dict.fromkeys([1, 3])
+    h = m.model(_ids(6), capture=cap)
+    assert cap[1].shape == (1, 6, TINY["hidden_size"])
+    assert mx.allclose(m.model.norm(cap[3]), h).item()
+```
+
+- [ ] **Step 2: Run to see them fail**
+
+Run: `python3 -m pytest tests/test_spec_cache.py -q`
+Expected: `ModuleNotFoundError: No module named 'laguna_mlx.cache'`
+
+- [ ] **Step 3: Implement `laguna_mlx/cache.py`**
+
+```python
+"""Sliding-window KV cache that can be trimmed, for speculative decoding."""
+import mlx.core as mx
+from mlx_lm.models.base import create_causal_mask
+from mlx_lm.models.cache import KVCache, _BaseCache
+
+
+class TrimmableWindowCache(_BaseCache):
+    """Keeps the last `window + slack` keys; `offset` stays the absolute position.
+
+    mlx-lm's RotatingKVCache can't trim once it wraps, and speculative decoding
+    trims after every rejected draft. Trimming up to `slack` tokens beyond the
+    latest update is always safe here.
+    """
+
+    def __init__(self, window, slack=64):
+        self.window, self.slack = window, slack
+        self.keys = self.values = None
+        self.offset = 0
+
+    def _stored(self):
+        return 0 if self.keys is None else min(self.keys.shape[2], self.window + self.slack)
+
+    def update_and_fetch(self, keys, values):
+        if self.keys is None:
+            self.keys, self.values = keys, values
+        else:
+            keep = self.window + self.slack
+            self.keys = mx.concatenate([self.keys[..., -keep:, :], keys], axis=2)
+            self.values = mx.concatenate([self.values[..., -keep:, :], values], axis=2)
+        self.offset += keys.shape[2]
+        return self.keys, self.values
+
+    def make_mask(self, N, return_array=False, window_size=None):
+        return create_causal_mask(N, offset=self._stored(), window_size=window_size or self.window)
+
+    @property
+    def state(self):
+        return self.keys, self.values
+
+    def is_trimmable(self):
+        return True
+
+    def trim(self, n):
+        n = min(n, 0 if self.keys is None else self.keys.shape[2])
+        if n:
+            self.keys, self.values = self.keys[..., :-n, :], self.values[..., :-n, :]
+            self.offset -= n
+        return n
+
+    def empty(self):
+        return self.keys is None
+
+    @property
+    def nbytes(self):
+        return 0 if self.keys is None else self.keys.nbytes + self.values.nbytes
+
+
+def make_trimmable_cache(model, slack=64):
+    return [
+        TrimmableWindowCache(model.args.sliding_window, slack)
+        if lt == "sliding_attention" else KVCache()
+        for lt in model.args.layer_types
+    ]
+```
+
+- [ ] **Step 4: Add `capture` to `LagunaModel.__call__` in `laguna_mlx/laguna.py`**
+
+Replace the method with:
+```python
+    def __call__(self, inputs, cache=None, capture=None):
+        h = self.embed_tokens(inputs)
+        if cache is None:
+            cache = [None] * len(self.layers)
+        masks = {}
+        for lt, c in zip(self.layer_types, cache):
+            if lt not in masks:
+                window = self.sliding_window if lt == "sliding_attention" else None
+                masks[lt] = create_attention_mask(h, c, window_size=window)
+        for i, (layer, lt, c) in enumerate(zip(self.layers, self.layer_types, cache)):
+            h = layer(h, masks[lt], c)
+            if capture is not None and i in capture:
+                capture[i] = h
+        return self.norm(h)
+```
+
+- [ ] **Step 5: Run the full suite**
+
+Run: `python3 -m pytest -q`
+Expected: all pass (earlier tasks' tests unchanged). If the trim test fails but the decode test passes, `make_mask` and `update_and_fetch` disagree on how many keys are stored — both must use `window + slack` for old keys.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add laguna_mlx/cache.py laguna_mlx/laguna.py tests/test_spec_cache.py
+git commit -m "feat: trimmable sliding-window cache and layer-output capture"
+```
+
+---
+
+### Task 13: DFlash draft model and lossless speculative loop
+
+**Files:**
+- Create: `laguna_mlx/dflash.py`
+- Test: `tests/test_dflash.py`
+
+**Interfaces:**
+- Consumes: `TrimmableWindowCache`, `make_trimmable_cache`, `LagunaModel.__call__(..., capture=)` (Task 12); `laguna.ModelArgs`, `laguna.DecoderLayer` (Task 1).
+- Produces: `DFlashDraft(config: dict)` with `.target_layer_ids`, `.block_size`, `.mask_token_id`, `make_cache()`, `context_states(aux: list) -> mx.array`, `add_context(ctx, cache)`, `propose(target, token: int, cache, n_draft: int) -> list[int]`, `sanitize(weights)`; `load_draft(path, bits=None) -> DFlashDraft`; `generate_greedy(target, prompt, max_tokens, eos=()) -> list[int]`; `generate_dflash(target, draft, prompt, max_tokens, eos=(), n_draft=None, prefill_step=2048) -> (list[int], dict)` with stats keys `steps, drafted, accepted, mean_accepted`.
+
+- [ ] **Step 1: Write the failing tests `tests/test_dflash.py`**
+
+```python
+import copy
+
+import mlx.core as mx
+import numpy as np
+import pytest
+
+from laguna_mlx.dflash import DFlashDraft, generate_dflash, generate_greedy
+from tests.tiny import TINY, mlx_model, torch_model
+
+DRAFT_CFG = {
+    "hidden_size": 64, "intermediate_size": 128, "num_hidden_layers": 2,
+    "num_attention_heads": 8, "num_key_value_heads": 2, "head_dim": 16,
+    "rms_norm_eps": 1e-6, "rope_theta": 500000.0, "sliding_window": 8,
+    "vocab_size": TINY["vocab_size"], "gating": "per-head",
+    "layer_types": ["sliding_attention"] * 2,
+    "dflash_config": {"block_size": 6, "mask_token_id": 12, "target_layer_ids": [1, 3], "causal": True},
+}
+PROMPT = list(np.random.default_rng(5).integers(0, TINY["vocab_size"], size=13))
+
+
+@pytest.fixture(scope="module")
+def target():
+    m = mlx_model(torch_model())
+    m.lm_head.weight = m.lm_head.weight * 50  # peaky logits: no float near-ties in argmax
+    return m
+
+
+@pytest.fixture(scope="module")
+def draft():
+    d = DFlashDraft(copy.deepcopy(DRAFT_CFG))
+    mx.eval(d.parameters())
+    return d
+
+
+class OracleDraft:
+    """Proposes the true greedy continuation, corrupted from slot `wrong` on."""
+
+    def __init__(self, real, truth, wrong=None):
+        self.real, self.truth, self.wrong = real, truth, wrong
+        self.target_layer_ids, self.block_size = real.target_layer_ids, real.block_size
+
+    def make_cache(self):
+        return self.real.make_cache()
+
+    def context_states(self, aux):
+        return self.real.context_states(aux)
+
+    def add_context(self, ctx, cache):
+        self.real.add_context(ctx, cache)
+
+    def propose(self, target, token, cache, n_draft):
+        pos = cache[0].offset  # position of `token`
+        out = [self.truth[pos + i] if pos + i < len(self.truth) else 0 for i in range(1, n_draft + 1)]
+        if self.wrong is not None:
+            out[self.wrong:] = [(t + 1) % TINY["vocab_size"] for t in out[self.wrong:]]
+        return out
+
+
+def test_random_draft_is_lossless(target, draft):
+    want = generate_greedy(target, PROMPT, 25)
+    got, stats = generate_dflash(target, draft, PROMPT, 25)
+    assert got == want and stats["steps"] > 0
+
+
+@pytest.mark.parametrize("wrong,expect_accept", [(None, 5), (2, 2)])
+def test_oracle_draft_accepts_and_stays_lossless(target, draft, wrong, expect_accept):
+    want = generate_greedy(target, PROMPT, 40)
+    truth = PROMPT + want
+    got, stats = generate_dflash(target, OracleDraft(draft, truth, wrong), PROMPT, 40)
+    assert got == want
+    assert stats["mean_accepted"] >= expect_accept - 0.5
+
+
+def test_eos_inside_accepted_run_stops_like_greedy(target, draft):
+    free = generate_greedy(target, PROMPT, 40)
+    eos = (free[17],)  # a token that will arrive mid-block with the oracle
+    want = generate_greedy(target, PROMPT, 40, eos=eos)
+    got, _ = generate_dflash(target, OracleDraft(draft, PROMPT + free), PROMPT, 40, eos=eos)
+    assert got == want and got[-1] == eos[0]
+
+
+def test_max_tokens_mid_block(target, draft):
+    want = generate_greedy(target, PROMPT, 23)
+    free = generate_greedy(target, PROMPT, 40)
+    got, _ = generate_dflash(target, OracleDraft(draft, PROMPT + free), PROMPT, 23)
+    assert got == want
+```
+
+- [ ] **Step 2: Run to see them fail**
+
+Run: `python3 -m pytest tests/test_dflash.py -q`
+Expected: `ModuleNotFoundError: No module named 'laguna_mlx.dflash'`
+
+- [ ] **Step 3: Implement `laguna_mlx/dflash.py`**
+
+```python
+"""DFlash speculative decoding for Laguna on MLX (greedy, lossless).
+
+Draft: dense Laguna layers conditioned on target hidden states from
+`target_layer_ids` (per-slice RMSNorm -> fc -> hidden_norm), injected as extra
+K/V in every draft layer. One draft pass over [token, mask x n] proposes n tokens;
+block slot i predicts the token at position(token) + i.
+References: vLLM PR #46853 (laguna_dflash.py, qwen3_dflash.py);
+speculators/models/dflash/core.py (training-time alignment).
+"""
+import json
+from pathlib import Path
+
+import mlx.core as mx
+import mlx.nn as nn
+from mlx_lm.models.base import create_attention_mask
+
+from laguna_mlx import laguna
+from laguna_mlx.cache import TrimmableWindowCache, make_trimmable_cache
+
+
+class DFlashDraft(nn.Module):
+    def __init__(self, config: dict):
+        super().__init__()
+        d = config["dflash_config"]
+        self.target_layer_ids = list(d["target_layer_ids"])
+        self.block_size = d["block_size"]
+        self.mask_token_id = d["mask_token_id"]
+        n = config["num_hidden_layers"]
+        self.args = laguna.ModelArgs.from_dict({
+            **config, "model_type": "laguna", "num_experts": 0, "num_experts_per_tok": 0,
+            "moe_intermediate_size": 0, "shared_expert_intermediate_size": 0,
+            "mlp_only_layers": list(range(n)),
+            # draft config ships only rope_theta: default RoPE, full rotary (as vLLM reads it)
+            "rope_parameters": config.get("rope_parameters")
+            or {"rope_type": "default", "rope_theta": config["rope_theta"]},
+        })
+        h = self.args.hidden_size
+        self.layers = [laguna.DecoderLayer(self.args, i) for i in range(n)]
+        self.aux_hidden_norms = [nn.RMSNorm(h, eps=self.args.rms_norm_eps) for _ in self.target_layer_ids]
+        self.fc = nn.Linear(h * len(self.target_layer_ids), h, bias=False)
+        self.hidden_norm = nn.RMSNorm(h, eps=self.args.rms_norm_eps)
+        self.norm = nn.RMSNorm(h, eps=self.args.rms_norm_eps)
+
+    def make_cache(self):
+        return [TrimmableWindowCache(self.args.sliding_window, slack=self.block_size) for _ in self.layers]
+
+    def context_states(self, aux):
+        x = mx.concatenate([norm(a) for norm, a in zip(self.aux_hidden_norms, aux)], axis=-1)
+        return self.hidden_norm(self.fc(x))
+
+    def add_context(self, ctx, cache):
+        """Project context states to K/V in every draft layer and append them."""
+        B, L, _ = ctx.shape
+        for layer, c in zip(self.layers, cache):
+            a = layer.self_attn
+            x = layer.input_layernorm(ctx)
+            k = a.k_norm(a.k_proj(x).reshape(B, L, a.n_kv_heads, -1)).transpose(0, 2, 1, 3)
+            v = a.v_proj(x).reshape(B, L, a.n_kv_heads, -1).transpose(0, 2, 1, 3)
+            c.update_and_fetch(a.rope(k, offset=c.offset), v)
+
+    def propose(self, target, token, cache, n_draft):
+        ids = mx.array([[token] + [self.mask_token_id] * n_draft])
+        h = target.model.embed_tokens(ids)
+        mask = create_attention_mask(h, cache[0], window_size=self.args.sliding_window)
+        for layer, c in zip(self.layers, cache):
+            h = layer(h, mask, c)
+        drafts = mx.argmax(target.lm_head(self.norm(h[:, 1:])), axis=-1)[0].tolist()
+        for c in cache:
+            c.trim(n_draft + 1)  # only context K/V persists between steps
+        return drafts
+
+    def sanitize(self, weights):
+        q = self.args.num_attention_heads * self.args.head_dim
+        kv = self.args.num_key_value_heads * self.args.head_dim
+        for i in range(len(self.layers)):
+            p = f"layers.{i}.self_attn."
+            qkv = weights.pop(p + "qkv_proj.weight", None)
+            if qkv is not None:
+                weights[p + "q_proj.weight"] = qkv[:q]
+                weights[p + "k_proj.weight"] = qkv[q : q + kv]
+                weights[p + "v_proj.weight"] = qkv[q + kv :]
+        return weights
+
+
+def load_draft(path, bits=None):
+    path = Path(path)
+    d = DFlashDraft(json.loads((path / "config.json").read_text()))
+    d.load_weights(list(d.sanitize(mx.load(str(path / "model.safetensors"))).items()))
+    if bits:
+        nn.quantize(d, group_size=64, bits=bits)
+    mx.eval(d.parameters())
+    return d
+
+
+def _target_step(target, ids, cache, layer_ids):
+    cap = dict.fromkeys(layer_ids)
+    h = target.model(mx.array([ids]), cache=cache, capture=cap)
+    return target.lm_head(h)[0], [cap[i] for i in layer_ids]
+
+
+def generate_greedy(target, prompt, max_tokens, eos=()):
+    cache = target.make_cache()
+    logits = target(mx.array([prompt]), cache=cache)[0, -1]
+    out = []
+    while True:
+        t = int(mx.argmax(logits))
+        out.append(t)
+        if t in eos or len(out) >= max_tokens:
+            return out
+        logits = target(mx.array([[t]]), cache=cache)[0, -1]
+
+
+def generate_dflash(target, draft, prompt, max_tokens, eos=(), n_draft=None, prefill_step=2048):
+    """Greedy speculative decoding; output equals generate_greedy."""
+    n_draft = n_draft or draft.block_size - 1
+    ids_layers = draft.target_layer_ids
+    tcache, dcache = make_trimmable_cache(target, slack=n_draft + 1), draft.make_cache()
+    for a in range(0, len(prompt), prefill_step):
+        logits, aux = _target_step(target, prompt[a : a + prefill_step], tcache, ids_layers)
+        draft.add_context(draft.context_states(aux), dcache)
+    token = int(mx.argmax(logits[-1]))
+    out, steps, accepted = [], 0, 0
+    while True:
+        drafts = draft.propose(target, token, dcache, n_draft)
+        logits, aux = _target_step(target, [token] + drafts, tcache, ids_layers)
+        g = mx.argmax(logits, axis=-1).tolist()  # g[j] = greedy token at position(token) + j + 1
+        k = 0
+        while k < n_draft and drafts[k] == g[k]:
+            k += 1
+        steps, accepted = steps + 1, accepted + k
+        for t in [token] + drafts[:k]:
+            out.append(t)
+            if t in eos or len(out) >= max_tokens:
+                return out, {"steps": steps, "drafted": steps * n_draft, "accepted": accepted,
+                             "mean_accepted": accepted / steps}
+        for c in tcache:
+            c.trim(n_draft - k)
+        draft.add_context(draft.context_states([a[:, : k + 1] for a in aux]), dcache)
+        token = g[k]
+```
+
+- [ ] **Step 4: Run tests**
+
+Run: `python3 -m pytest tests/test_dflash.py -q`
+Expected: 5 passed. A lossless failure with the oracle but not the random draft means the trim/context bookkeeping is off by one: after a step, target and draft caches must both have `offset == position(token)`.
+
+- [ ] **Step 5: Full suite, then commit**
+
+```bash
+python3 -m pytest -q
+git add laguna_mlx/dflash.py tests/test_dflash.py
+git commit -m "feat: DFlash draft model and lossless speculative decoding"
+```
+
+---
+
+### Task 14: DFlash on real weights — acceptance and speed
+
+**Files:**
+- Create: `scripts/bench_dflash.py`
+- Output: `results/dflash.json`
+
+**Interfaces:**
+- Consumes: `load_draft`, `generate_greedy`, `generate_dflash` (Task 13); `PROMPTS` from `scripts/check_parity.py` (Task 5); converted model (Task 4).
+
+- [ ] **Step 1: Download the draft (0.9 GB)**
+
+```bash
+hf download poolside/Laguna-XS-2.1-DFlash --local-dir models/Laguna-XS-2.1-DFlash
+```
+
+- [ ] **Step 2: Write `scripts/bench_dflash.py`**
+
+```python
+"""Greedy baseline vs DFlash on 10 coding prompts x draft sizes x draft precisions.
+
+python3 scripts/bench_dflash.py [--max-tokens 256]
+"""
+import argparse
+import json
+import time
+from pathlib import Path
+
+import mlx.core as mx
+
+import laguna_mlx  # noqa: F401
+from laguna_mlx.dflash import generate_dflash, generate_greedy, load_draft
+from mlx_lm import load
+from scripts.check_parity import PROMPTS
+
+p = argparse.ArgumentParser()
+p.add_argument("--max-tokens", type=int, default=256)
+a = p.parse_args()
+
+mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
+target, tok = load("models/Laguna-XS-2.1-mlx-4bit")
+eos = tuple(tok.eos_token_ids)
+prompts = [tok.apply_chat_template([{"role": "user", "content": q}], add_generation_prompt=True,
+                                   enable_thinking=False) for q in PROMPTS]
+
+
+def timed(fn):
+    t0 = time.perf_counter()
+    r = fn()
+    return r, time.perf_counter() - t0
+
+
+generate_greedy(target, prompts[0], 8)  # warm-up
+base = []
+for pr in prompts:
+    out, dt = timed(lambda: generate_greedy(target, pr, a.max_tokens, eos))
+    base.append({"tokens": out, "tok_s": len(out) / dt})
+base_tps = sum(b["tok_s"] for b in base) / len(base)
+print("baseline tok/s", base_tps, flush=True)
+
+runs = []
+for bits in (None, 8, 4):
+    draft = load_draft("models/Laguna-XS-2.1-DFlash", bits=bits)
+    for n_draft in (3, 7, 15):
+        rows = []
+        for pr, b in zip(prompts, base):
+            (out, st), dt = timed(lambda: generate_dflash(target, draft, pr, a.max_tokens, eos, n_draft))
+            rows.append({"tok_s": len(out) / dt, "mean_accepted": st["mean_accepted"],
+                         "identical": out == b["tokens"]})
+        run = {"draft_bits": bits or 16, "n_draft": n_draft,
+               "tok_s": sum(r["tok_s"] for r in rows) / len(rows),
+               "mean_accepted": sum(r["mean_accepted"] for r in rows) / len(rows),
+               "identical_frac": sum(r["identical"] for r in rows) / len(rows)}
+        run["speedup"] = run["tok_s"] / base_tps
+        runs.append(run)
+        print(run, flush=True)
+    del draft
+
+Path("results/dflash.json").write_text(json.dumps(
+    {"baseline_tok_s": base_tps, "max_tokens": a.max_tokens, "runs": runs}, indent=1))
+```
+
+- [ ] **Step 3: Sanity-check acceptance before the full sweep**
+
+```bash
+python3 - <<'EOF'
+import laguna_mlx
+from laguna_mlx.dflash import generate_dflash, load_draft
+from mlx_lm import load
+from scripts.check_parity import PROMPTS
+t, tok = load("models/Laguna-XS-2.1-mlx-4bit")
+d = load_draft("models/Laguna-XS-2.1-DFlash")
+pr = tok.apply_chat_template([{"role": "user", "content": PROMPTS[0]}], add_generation_prompt=True, enable_thinking=False)
+out, st = generate_dflash(t, d, pr, 128, tuple(tok.eos_token_ids))
+print(st); print(tok.decode(out))
+EOF
+```
+Expected: coherent code and `mean_accepted` ≥ 2. If it is below 0.5 the draft is mis-wired. Check in this order, re-running this step after each: (1) draft RoPE — try `{"rope_type": "default", "rope_theta": 500000.0, "partial_rotary_factor": 0.5}`; (2) captured layers — try `target_layer_ids` shifted by +1 (the config also lists `eagle_aux_hidden_state_layer_ids` `[2,14,26,34,40]`, a hidden-states-tuple index, i.e. output of layer id−1, which is what the code captures); (3) block causality — `propose` currently uses a causal mask within the block. Record what fixed it in the task report.
+
+- [ ] **Step 4: Run the sweep**
+
+Run: `python3 scripts/bench_dflash.py`
+Expected: `results/dflash.json` with 9 runs. `identical_frac` should be ≥ 0.9 (bf16 batched verification can flip rare near-ties; below 0.9 means a bug). Report the best speedup and its setting in the task report.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add scripts/bench_dflash.py results/dflash.json && git commit -m "feat: DFlash benchmark on real weights"
+```
+
+---
+
+### Task 15: Decode pipelining, compile, and prefill tuning
+
+**Files:**
+- Create: `scripts/bench_decode.py`
+- Modify (only if the measurement says so): `laguna_mlx/laguna.py`, `replay/replay.py` (`chunk` default), `laguna_mlx/dflash.py` (`prefill_step` default)
+- Output: `results/inference_opt.json`
+
+- [ ] **Step 1: Write `scripts/bench_decode.py`**
+
+```python
+"""Decode and prefill measurements -> results/inference_opt.json
+
+python3 scripts/bench_decode.py [--compile]
+"""
+import argparse
+import json
+import time
+from pathlib import Path
+
+import mlx.core as mx
+import numpy as np
+
+import laguna_mlx  # noqa: F401
+from mlx_lm import load, stream_generate
+
+p = argparse.ArgumentParser()
+p.add_argument("--compile", action="store_true", help="label this run as the compiled variant")
+a = p.parse_args()
+mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
+model, tok = load("models/Laguna-XS-2.1-mlx-4bit")
+prompt = tok.apply_chat_template([{"role": "user", "content": "Write a JSON parser in Python."}],
+                                 add_generation_prompt=True, enable_thinking=False)
+
+
+def naive_decode(n=128):
+    cache = model.make_cache()
+    logits = model(mx.array([prompt]), cache=cache)[0, -1]
+    t0 = time.perf_counter()
+    for _ in range(n):
+        logits = model(mx.array([[int(mx.argmax(logits))]]), cache=cache)[0, -1]
+    return n / (time.perf_counter() - t0)
+
+
+def pipelined_decode(n=128):
+    last = None
+    for last in stream_generate(model, tok, prompt, max_tokens=n):
+        pass
+    return last.generation_tps
+
+
+def prefill(ctx, step):
+    ids = np.random.default_rng(0).integers(1000, 50000, size=ctx).tolist()
+    mx.clear_cache()
+    mx.reset_peak_memory()
+    last = None
+    for last in stream_generate(model, tok, ids, max_tokens=1, prefill_step_size=step):
+        pass
+    return {"ctx": ctx, "step": step, "prompt_tps": last.prompt_tps, "peak_gb": mx.get_peak_memory() / 1e9}
+
+
+naive_decode(8)  # warm-up
+out = {"variant": "compiled" if a.compile else "baseline",
+       "naive_decode_tok_s": naive_decode(), "pipelined_decode_tok_s": pipelined_decode(),
+       "prefill": [prefill(32768, s) for s in (512, 1024, 2048, 4096)]}
+print(json.dumps(out, indent=1))
+path = Path("results/inference_opt.json")
+runs = json.loads(path.read_text())["runs"] if path.exists() else []
+path.write_text(json.dumps({"runs": [r for r in runs if r["variant"] != out["variant"]] + [out]}, indent=1))
+```
+
+- [ ] **Step 2: Baseline run**
+
+Run: `python3 scripts/bench_decode.py`
+Record: naive vs pipelined decode tok/s, and the prefill step with the highest `prompt_tps` whose `peak_gb` stays under the GPU limit.
+
+- [ ] **Step 3: Compile candidates in `laguna_mlx/laguna.py`**
+
+Add at module level and use them in place of the inline expressions:
+```python
+@mx.compile
+def _gated(out, g, per_head):
+    gate = nn.softplus(g.astype(mx.float32)).astype(out.dtype)
+    if per_head:
+        return out * gate[..., None]
+    B, L, H, _ = out.shape
+    return out * gate.reshape(B, L, H, -1)
+
+
+@mx.compile
+def _topk_weights(scores, inds, norm):
+    w = mx.take_along_axis(scores, inds, axis=-1)
+    return w / w.sum(axis=-1, keepdims=True) if norm else w
+```
+In `Attention.__call__`: `return self.o_proj(_gated(out, self.g_proj(x), self.per_head_gate).reshape(B, L, -1))`.
+In `SparseMoeBlock.route`: `w = _topk_weights(scores, inds, self.norm_topk_prob)` then `return inds, w.astype(x.dtype)`.
+
+Run: `python3 -m pytest -q` (all pass: compile must not change numerics beyond the existing tolerances), then `python3 scripts/bench_decode.py --compile`.
+
+- [ ] **Step 4: Decide and record**
+
+Keep the compile change only if `pipelined_decode_tok_s` improves ≥3% over baseline; otherwise `git checkout laguna_mlx/laguna.py` and note the negative result in the task report. Set the best prefill step as the default `chunk` in `replay/replay.py` (`assistant_logprobs`, `build_ref`, `score`) and `prefill_step` in `laguna_mlx/dflash.py`, and add `mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])` at the top of `replay.replay.main`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+python3 -m pytest -q
+git add -A scripts/bench_decode.py results/inference_opt.json laguna_mlx replay
+git commit -m "perf: decode/prefill measurements and tuned defaults"
+```

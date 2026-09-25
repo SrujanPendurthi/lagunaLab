@@ -115,3 +115,54 @@ passes).
   box for ~$2 once.
 - **pool prompt capture:** if pool/ollama don't expose raw requests, run a
   tiny logging proxy on the OpenAI-compatible endpoint.
+
+---
+
+# Addendum (2026-09-25): inference optimization
+
+Requested mid-plan: optimize inference via (1) DFlash speculative decoding,
+(2) compiled decode, (3) prefill tuning. Runs after Task 10 (needs real
+weights and the baseline).
+
+## 1. DFlash speculative decoding (first MLX port; not upstream in vLLM/TRT-LLM yet)
+
+`poolside/Laguna-XS-2.1-DFlash`: 5 dense Laguna layers (64 q / 8 kv heads,
+sliding window 512, per-head gate, fused `qkv_proj`), no embeddings or
+lm_head of its own (shares the target's). Conditioning: target hidden states
+after layers `[1, 13, 25, 33, 39]` → per-slice RMSNorm → `fc` (10240→2048) →
+`hidden_norm` = one context state per target token, projected to K/V by every
+draft layer (`input_layernorm`, `k_proj`+`k_norm`+RoPE, `v_proj`) and stored in
+the draft KV cache. A draft pass runs block `[last token, mask(id 12) × n]` at
+positions `p..p+n`, causal within the block; slot `i` predicts the token at
+`p+i`. Target verifies the block in one forward, greedy acceptance, rejected
+tokens trimmed from both caches. Greedy output must equal plain greedy decoding.
+
+Design points:
+- **Trimmable sliding-window cache.** mlx-lm's `RotatingKVCache` can't trim
+  after it wraps; add `TrimmableWindowCache` (keeps `window + slack` keys,
+  absolute `offset`).
+- **Aux hidden capture:** `LagunaModel.__call__(..., capture=dict)` records
+  outputs of chosen layers.
+- **MoE verification cost:** verifying 16 tokens touches up to ~12× the expert
+  weights of a 1-token decode, so sweep `n_draft ∈ {3, 7, 15}` and draft
+  precision `{bf16, 8-bit, 4-bit}`.
+- **Correctness:** tiny-config test that speculative output == greedy output
+  (random draft and oracle draft with partial acceptance); on real weights,
+  acceptance length is the check (Poolside reports 3.5–4.6 on GPU benchmarks).
+  If it is near 0, the likeliest bug is draft RoPE (config gives only
+  `rope_theta`; vLLM treats it as default RoPE, full rotary).
+
+## 2. Compiled decode / pipelining
+
+Measure decode tok/s for: naive `mx.eval` loop, `mlx_lm.stream_generate`
+(async eval pipelining), and `mx.compile` on the router weight math and
+attention output gate. Keep a change only if logits match (atol 1e-3 in bf16)
+and decode is ≥3% faster; otherwise record the negative result.
+
+## 3. Prefill tuning
+
+Sweep prefill chunk `{512, 1024, 2048, 4096}` at 32k context (tok/s, peak
+memory), and set `mx.set_wired_limit` in every benchmark and replay entry
+point. The best chunk becomes the default in replay and DFlash prefill.
+
+Outputs: `results/dflash.json`, `results/inference_opt.json`.
