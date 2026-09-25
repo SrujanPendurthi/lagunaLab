@@ -47,6 +47,7 @@ def test_forwards_stream_logs_requests_and_errors(tmp_path):
     except urllib.error.HTTPError as e:
         assert e.code == 500
 
+    time.sleep(0.1)  # Give server time to write log
     lines = [json.loads(l) for l in log.read_text().splitlines()]
     assert [l["status"] for l in lines] == [200, 500]
     assert lines[0]["request"]["messages"][0]["content"] == "hi"
