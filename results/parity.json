@@ -1,0 +1,132 @@
+{
+ "top1": 0.046130952380952384,
+ "in_top5": 0.047619047619047616,
+ "rows": [
+  {
+   "label": "p0_plain",
+   "prompt_tokens": 52,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p0_think",
+   "prompt_tokens": 52,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p1_plain",
+   "prompt_tokens": 55,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p1_think",
+   "prompt_tokens": 55,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p2_plain",
+   "prompt_tokens": 65,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p2_think",
+   "prompt_tokens": 65,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p3_plain",
+   "prompt_tokens": 57,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p3_think",
+   "prompt_tokens": 57,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p4_plain",
+   "prompt_tokens": 55,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p4_think",
+   "prompt_tokens": 55,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p5_plain",
+   "prompt_tokens": 49,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p5_think",
+   "prompt_tokens": 49,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p6_plain",
+   "prompt_tokens": 60,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p6_think",
+   "prompt_tokens": 60,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p7_plain",
+   "prompt_tokens": 73,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p7_think",
+   "prompt_tokens": 73,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p8_plain",
+   "prompt_tokens": 65,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p8_think",
+   "prompt_tokens": 65,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p9_plain",
+   "prompt_tokens": 57,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "p9_think",
+   "prompt_tokens": 57,
+   "top1": 0.0,
+   "in_top5": 0.0
+  },
+  {
+   "label": "long_doc",
+   "prompt_tokens": 9782,
+   "top1": 0.96875,
+   "in_top5": 1.0
+  }
+ ]
+}
