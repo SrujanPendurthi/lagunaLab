@@ -41,7 +41,9 @@ REF_TEXT = Path("tests/reference/modeling_laguna.py").read_text()
 def swap_gb():
     out = subprocess.run(["sysctl", "vm.swapusage"], capture_output=True, text=True).stdout
     m = re.search(r"used = ([\d.]+)M", out)
-    return float(m.group(1)) / 1024 if m else 0.0
+    if not m:  # fail closed: an unparsed reading must not look like "no swap pressure"
+        raise RuntimeError(f"could not parse `sysctl vm.swapusage` output: {out!r}")
+    return float(m.group(1)) / 1024
 
 
 def run(model, tok, label):
@@ -89,7 +91,17 @@ def long_context_decode(model, tok, ctx_tokens=16000, gen_tokens=64):
             "ctx_tokens": len(prompt_ids)}
 
 
-rows, outs_by_label, notes = [], {}, []
+rows, outs_by_label = [], {}
+notes = [
+    "identical_frac < 1 is hypothesized to come from bf16 exact logit ties broken differently by "
+    "streaming's vs. resident's floating-point summation order across expert contributions "
+    "(per-forward-pass logits still agree to atol/rtol=1e-5); pending direct verification.",
+    "max_rss_gb (resource.getrusage) is unreliable on Apple Silicon unified memory -- it does not "
+    "track MLX/Metal GPU buffer allocation. Use peak_gpu_gb for memory-safety judgments instead.",
+    "hit_rate/bytes_read on each row come from that row's short-prompt run only; the 16k-context "
+    "measurement (prefill_16k_tok_s/decode_16k_tok_s) reloads a fresh model instance with its own "
+    "empty expert-slot cache, so its hits/misses are not folded into the row's hit_rate/bytes_read.",
+]
 first_streaming = True
 
 for s in a.slots:
