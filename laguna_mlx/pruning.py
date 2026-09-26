@@ -122,7 +122,10 @@ def scores(stats, criterion, seed=0):
 
 
 def keep_sets(sal, ratio, allocation="uniform", min_keep=16):
-    """Experts to keep per layer (sorted). ratio = fraction of experts pruned."""
+    """Experts to keep per layer (sorted). ratio = fraction of experts pruned.
+
+    min_keep applies to allocation="global" only; uniform ignores it.
+    """
     if allocation == "uniform":
         out = {}
         for i, v in sal.items():
@@ -145,16 +148,30 @@ def keep_sets(sal, ratio, allocation="uniform", min_keep=16):
 
 
 def apply_mask(model, keep):
-    """Route only to kept experts: pruned experts' selection bias becomes -inf. Returns undo()."""
-    saved = {}
+    """Route only to kept experts: pruned experts' selection bias becomes -inf. Returns undo().
+
+    Validates every layer's keep-set (size >= top_k, indices in range and unique) before
+    mutating any layer, so a bad keep-set anywhere raises without partially masking the model.
+    """
+    checked = {}
     for i, k in keep.items():
         mlp = model.layers[i].mlp
+        k = np.asarray(k)
+        E = mlp.e_score_correction_bias.shape[0]
         if len(k) < mlp.top_k:
             raise ValueError(f"layer {i}: keeping {len(k)} experts < top_k {mlp.top_k}")
+        if k.size and (k.min() < 0 or k.max() >= E):
+            raise ValueError(f"layer {i}: keep indices out of range [0, {E})")
+        if len(set(k.tolist())) != len(k):
+            raise ValueError(f"layer {i}: keep indices must be unique")
+        checked[i] = (mlp, k)
+
+    saved = {}
+    for i, (mlp, k) in checked.items():
         b = mlp.e_score_correction_bias
         saved[i] = b
         allowed = np.zeros(b.shape[0], bool)
-        allowed[np.asarray(k)] = True
+        allowed[k] = True
         mlp.e_score_correction_bias = mx.where(mx.array(allowed), b.astype(mx.float32), -mx.inf)
 
     def undo():

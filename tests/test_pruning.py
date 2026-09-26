@@ -129,3 +129,17 @@ def test_mask_smaller_than_top_k_raises():
     m = mlx_model(torch_model())
     with pytest.raises(ValueError):
         apply_mask(m, {1: np.array([0])})
+
+
+def test_mask_validates_all_layers_before_mutating_any():
+    m = mlx_model(torch_model())
+    ids = _ids(16)
+    before_bias = {i: np.array(l.mlp.e_score_correction_bias) for i, l in enumerate(m.layers)
+                   if hasattr(l.mlp, "e_score_correction_bias")}
+    before_logits = np.array(m(ids))
+    keep = {1: np.array([0, 2, 5]), 2: np.array([1, 3, 4, 7]), 3: np.array([0])}
+    with pytest.raises(ValueError):
+        apply_mask(m, keep)
+    for i, b in before_bias.items():
+        np.testing.assert_array_equal(np.array(m.layers[i].mlp.e_score_correction_bias), b)
+    np.testing.assert_array_equal(np.array(m(ids)), before_logits)
