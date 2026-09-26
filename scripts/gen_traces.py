@@ -1,15 +1,23 @@
 """Run pool on SWE-bench Lite tasks; the proxy captures every model request.
 
-Wiring (deviates from the original brief): ollama serves on its default port
-11434. The proxy listens on 11435 and forwards to ollama at 11434. pool is
-pointed at the proxy via env vars, per the pool README's "OpenAI-compatible
-API" / standalone-mode section:
+Task 8b: backend is our SSD-streaming MLX model (scripts.serve_streaming) via
+mlx-lm's OpenAI-compatible server, not ollama. The proxy listens on 11435 and
+forwards to the streaming server at 8081. pool is pointed at the proxy via env
+vars, per the pool README's "OpenAI-compatible API" / standalone-mode section:
   POOLSIDE_STANDALONE_BASE_URL=http://127.0.0.1:11435   (bare URL; pool appends /v1 itself)
   POOLSIDE_API_KEY=EMPTY
-  POOLSIDE_STANDALONE_MODEL=<ollama tag, e.g. laguna-xs-2.1>
+  POOLSIDE_STANDALONE_MODEL=default_model   (mlx-lm's alias for whatever --model it was started with;
+                                              verified in the Task 8b smoke that this hits the server's
+                                              prompt cache same as the literal path, with no reload)
   POOLSIDE_STANDALONE_CONTEXT_LENGTH=32768
 
-Prereqs (separate terminal): OLLAMA_CONTEXT_LENGTH=32768 ollama serve
+Prereqs (separate terminal): python3 -m scripts.serve_streaming --slots 32 --port 8081 \
+  --prompt-cache-size 6 --prompt-cache-bytes 4294967296 --max-tokens 4096
+  (cache-size 2 evicts the growing conversation's own KV entry under the 3-way
+  assistant/user/system LRU split, forcing full re-prefill every turn -- see
+  Task 8b report. max-tokens must be raised too: pool never sets it in the
+  request, and mlx-lm.server's default of 512 is far too small for a tool-
+  calling turn; pool aborts the whole run on a truncated completion.)
 python3 -m scripts.gen_traces --n 50      # resumable: skips finished tasks
 """
 import argparse
@@ -32,10 +40,10 @@ p = argparse.ArgumentParser()
 p.add_argument("--n", type=int, default=50)
 p.add_argument("--work", default=str(Path.home() / "laguna-work"))
 p.add_argument("--traces", default="traces")
-p.add_argument("--timeout", type=int, default=3600)
+p.add_argument("--timeout", type=int, default=7200)
 p.add_argument("--proxy-port", type=int, default=11435)
-p.add_argument("--ollama-port", type=int, default=11434)
-p.add_argument("--model", default="laguna-xs-2.1")
+p.add_argument("--server-port", type=int, default=8081)
+p.add_argument("--model", default="default_model")
 p.add_argument("--context-length", type=int, default=32768)
 a = p.parse_args()
 
@@ -64,7 +72,7 @@ for row in df.itertuples():
         subprocess.run(["git", "-C", str(mirror), "worktree", "add", "--detach", str(wt), row.base_commit], check=True)
     partial = out.with_suffix(".partial")
     proxy = subprocess.Popen([sys.executable, "-m", "scripts.proxy", "--listen", str(a.proxy_port),
-                              "--upstream", f"http://127.0.0.1:{a.ollama_port}", "--out", str(partial)])
+                              "--upstream", f"http://127.0.0.1:{a.server_port}", "--out", str(partial)])
     time.sleep(1)
     t0 = time.time()
     try:
