@@ -1,4 +1,6 @@
-from scripts.lookup_acceptance import GramIndex, common_prefix_len, lookup, simulate
+import pytest
+
+from scripts.lookup_acceptance import GramIndex, build_measured_cost_fn, common_prefix_len, lookup, simulate
 
 # Hand-made ids: prefix [0, 1], then "2 3 4 5" repeated, then "2 3 4" followed by a divergent 9.
 #   idx:  0  1  2  3  4  5  6  7  8  9  10 11 12 13
@@ -74,3 +76,31 @@ def test_simulate_clamps_accept_window_and_advance_to_span_end():
     d = idx.propose(10, 15)
     unclamped_window = IDS_BOUNDARY[10 : 10 + len(d)]
     assert common_prefix_len(d, unclamped_window) == 6  # would overshoot the 4-token span by 3
+
+
+# Hand-made measured-cost fixture: L=1,3,5 measured (median only; iqr isn't read by the cost fn).
+VERIFY_MS = {"1": {"median": 10.0, "iqr": 0.0}, "3": {"median": 20.0, "iqr": 0.0}, "5": {"median": 44.0, "iqr": 0.0}}
+
+
+def test_measured_cost_fn_exact_hit():
+    cost = build_measured_cost_fn(VERIFY_MS)
+    assert cost.measured_L == [1, 3, 5]
+    assert cost(0) == 10.0  # L=1, measured directly
+    assert cost(2) == 20.0  # L=3, measured directly
+    assert cost(4) == 44.0  # L=5, measured directly
+
+
+def test_measured_cost_fn_interpolates_between_nearest_measured_l():
+    cost = build_measured_cost_fn(VERIFY_MS)
+    # L=2 (m=1): halfway between L=1 (10.0) and L=3 (20.0)
+    assert cost(1) == pytest.approx(15.0)
+    # L=4 (m=3): halfway between L=3 (20.0) and L=5 (44.0)
+    assert cost(3) == pytest.approx(32.0)
+
+
+def test_measured_cost_fn_refuses_to_extrapolate():
+    cost = build_measured_cost_fn(VERIFY_MS)
+    with pytest.raises(ValueError):
+        cost(-1)  # L=0, below the lowest measured L=1
+    with pytest.raises(ValueError):
+        cost(5)  # L=6, above the highest measured L=5
