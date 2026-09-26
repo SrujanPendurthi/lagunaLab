@@ -4,3 +4,4 @@ traces/
 refs/
 __pycache__/
 .DS_Store
+results/overnight/
