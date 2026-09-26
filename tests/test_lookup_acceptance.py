@@ -50,3 +50,27 @@ def test_simulate_adaptive_caps_draft_length():
 def test_no_span_is_a_no_op():
     r = simulate(IDS, [], g=2, n=15, adaptive=False)
     assert r == {"steps": 0, "hits": 0, "accepted_sum": 0, "tokens_generated": 0, "total_cost_ms": 0.0}
+
+
+# Second span begins with "1 2" (matching s=0's "1 2"), so at t=10 the draft copies the whole
+# repeat: [3,4,5,6,7,8, 1,2] (8 tokens). But the assistant span itself only covers ids[10:14]
+# (values 3,4,5,6) -- ids[14:17] = 7,8,9 is the *next* message, which coincidentally also
+# starts with 7,8. An unclamped comparison would accept k=6 (matching through idx 15) and
+# advance t by 7, overshooting the 4-token span by 3. The clamp must cap both the accept
+# window and the credited advance at the span's own end.
+IDS_BOUNDARY = [1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+
+def test_simulate_clamps_accept_window_and_advance_to_span_end():
+    r = simulate(IDS_BOUNDARY, [(10, 14)], g=2, n=15, adaptive=False)
+    # clamped: k is capped at the 4 remaining span tokens (all match), advance capped at 4
+    # (not k+1=5, which would run past the span's own end)
+    assert r == {"steps": 1, "hits": 1, "accepted_sum": 4, "tokens_generated": 4, "total_cost_ms": 76.0}
+    assert r["tokens_generated"] == 14 - 10  # exact span length, no overshoot
+
+    # confirm the bug this guards against: uncapped, the draft's tail ("...,1,2") diverges
+    # from the true continuation only after matching 6 tokens into the next message
+    idx = GramIndex(IDS_BOUNDARY, 2)
+    d = idx.propose(10, 15)
+    unclamped_window = IDS_BOUNDARY[10 : 10 + len(d)]
+    assert common_prefix_len(d, unclamped_window) == 6  # would overshoot the 4-token span by 3

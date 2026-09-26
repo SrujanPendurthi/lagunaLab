@@ -88,11 +88,14 @@ def simulate(ids, span_list, g, n, adaptive):
 
     At t, propose d = lookup(ids, t, g, n) (adaptive: n capped at min(n, 1 + previous
     step's accepted count); a span's first step uses the full n). Accepted k = matching
-    prefix length of d against the true continuation ids[t:t+len(d)]. One verify forward
-    advances k+1 tokens at cost C(len(d)). Not clamped to the span's own end: a draft may
-    (rarely) run past it into the next message on its last step of a span; this only
-    slightly inflates tokens_generated relative to raw span length and is left as-is for
-    fidelity to the algorithm rather than adding a second clamp.
+    prefix length of d against the true continuation, clamped to the span's own end (a
+    draft can't be credited with tokens past the assistant span -- those positions belong
+    to a different message/role and were never something this decode step could have
+    produced). One verify forward then advances k+1 tokens (also clamped to not run past
+    the span end: if the entire remaining span matched, k+1 would overshoot by exactly 1,
+    since there's no room left in the span for the target's own resampled token) at cost
+    C(len(d)) -- the drafted length itself is not clamped, since that's the cost actually
+    paid for the forward regardless of how much of it turns out to be creditable.
     """
     idx = GramIndex(ids, g)
     steps = hits = accepted_sum = tokens_generated = 0
@@ -102,15 +105,17 @@ def simulate(ids, span_list, g, n, adaptive):
         while t < end:
             n_cur = n if not adaptive else min(n, 1 + prev_k)
             d = idx.propose(t, n_cur)
-            k = common_prefix_len(d, ids[t : t + len(d)])
+            window = ids[t : min(t + len(d), end)]
+            k = common_prefix_len(d, window)
             c = cost_ms(len(d))
+            advance = min(k + 1, end - t)
             steps += 1
             hits += 1 if d else 0
             accepted_sum += k
-            tokens_generated += k + 1
+            tokens_generated += advance
             total_cost += c
             prev_k = k
-            t += k + 1
+            t += advance
     return {
         "steps": steps, "hits": hits, "accepted_sum": accepted_sum,
         "tokens_generated": tokens_generated, "total_cost_ms": total_cost,
@@ -152,6 +157,30 @@ def main():
         })
     print(f"loaded {len(sessions)} sessions in {time.time()-t_start:.1f}s", flush=True)
 
+    corpus_by_session = {
+        s["name"]: {
+            "repo": s["repo"], "total_tokens": len(s["ids"]),
+            "assistant_tokens": sum(e - st for st, e in s["spans"]),
+            "truncated": s["truncated"],
+        }
+        for s in sessions
+    }
+    corpus_by_repo = {}
+    for repo in sorted({s["repo"] for s in sessions}):
+        rows = [corpus_by_session[s["name"]] for s in sessions if s["repo"] == repo]
+        corpus_by_repo[repo] = {
+            "num_sessions": len(rows),
+            "total_tokens": sum(r["total_tokens"] for r in rows),
+            "assistant_tokens": sum(r["assistant_tokens"] for r in rows),
+        }
+    corpus = {
+        "num_sessions": len(sessions),
+        "total_tokens": sum(v["total_tokens"] for v in corpus_by_session.values()),
+        "total_assistant_tokens": sum(v["assistant_tokens"] for v in corpus_by_session.values()),
+        "by_repo": corpus_by_repo,
+        "by_session": corpus_by_session,
+    }
+
     sweep = []
     for adaptive in (False, True):
         for g in G_VALUES:
@@ -184,10 +213,17 @@ def main():
             "formula": "C(m) = base_ms + per_token_ms * m, where m = number of drafted "
                        "(proposed) tokens; m=0 is a plain 1-token decode at base_ms.",
             "expected_speedup_formula": "(tokens_generated / total_cost_ms) / (1 / base_ms)",
-            "source": "measured on the resident Laguna-XS-2.1 target: ~24ms/1-token forward, "
-                      "~121ms/16-token block",
+            "status": "provisional",
+            "source": "Two points (m=0, m=15) from Task 14's profiling of the resident "
+                      "Laguna-XS-2.1 target (~24ms for a 1-token forward, ~121ms for a "
+                      "16-token block); that profiling is not itself checked into results/ "
+                      "and is treated here as provisional pending S1's "
+                      "results/dflash_diag.json, which should supersede these constants. "
+                      "A linear model is assumed between and beyond the two measured "
+                      "points; not independently verified at intermediate m.",
         },
         "g_values": list(G_VALUES), "n_values": list(N_VALUES),
+        "corpus": corpus,
         "num_sessions": len(sessions), "session_names": [s["name"] for s in sessions],
         "sweep": sweep,
         "best_tokens_per_forward": {"g": best_tpf["g"], "n": best_tpf["n"], "variant": best_tpf["variant"],
