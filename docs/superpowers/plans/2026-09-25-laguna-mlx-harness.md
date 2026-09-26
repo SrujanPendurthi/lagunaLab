@@ -2912,3 +2912,79 @@ Proxy listens on 11435 with upstream `http://127.0.0.1:8081`; pool env: `POOLSID
 - [ ] **Step 4: Smoke (1 task), then overnight (12 tasks)**
 
 `python3 -m scripts.gen_traces --n 1`: check coherent assistant turns and tool calls, swap stays low. Then `nohup python3 -m scripts.gen_traces --n 12 > traces/run.log 2>&1 &` and return without waiting. Commit `scripts/serve_streaming.py` and `scripts/gen_traces.py`.
+
+---
+
+## Addendum 3: speed plan if DFlash doesn't pay off (Tasks S1–S5)
+
+Context (2026-09-26): on the resident 4-bit target every DFlash setting is slower than plain greedy (0.36–0.86×; acceptance 1.8–2.5 vs Poolside's 3.5–4.6 on GPU), and `identical_frac` is only 0–0.2. The streaming sweep is pending.
+
+**Decision rules**
+- S1 always runs: it decides whether the DFlash result is about the hardware or about a bug in our port.
+- If S1 finds a bug: fix it and re-run Task 14. If the speedup is then above 1.1× on either target, DFlash stays; otherwise continue below.
+- If DFlash stays below 1.1× on both targets: record it as a documented negative result, then S2, then S3/S4 if S2's offline acceptance is at least 2.0, and S5 in parallel.
+- S2 and S5's profiling pass are daytime-safe (S2 is CPU-only; S5 uses the streaming model at ~5 GB). S4 and the final S5 timing run happen overnight or while the human is idle.
+
+### Task S1: DFlash equivalence diagnostic
+
+**Files:** Create `scripts/diag_dflash.py`; output `results/dflash_diag.json`.
+
+For 3 prompts, run `generate_greedy` twice (with `target.make_cache()`, and with `make_trimmable_cache(target)` in a copy of the greedy loop) plus `generate_dflash`. Record the first divergence index between every pair and the top-2 logit gap at that position (logits from the path that diverged). Expected outcomes:
+- (a) The trimmable-cache greedy diverges from standard greedy at near-tie positions, and DFlash matches the trimmable-cache greedy. Then the port is correct and the divergence is bf16/kernel-path noise.
+- (b) DFlash diverges from the trimmable-cache greedy at positions that are not ties. Then it's a bug in `generate_dflash`, and the report must localize it with evidence.
+The pass criterion is (a) on all 3 prompts.
+
+### Task S2: Offline prompt-lookup acceptance on captured sessions (CPU only)
+
+**Files:** Create `scripts/lookup_acceptance.py`; output `results/lookup_acceptance.json`.
+
+No model. For each captured session, tokenize it (`replay.session`). At every assistant position t, propose up to n tokens by prompt lookup: find the most recent earlier occurrence of the last g tokens `ids[t-g:t]` and propose the tokens that followed it. Count how many proposals match `ids[t:t+n]` in order. This is exact acceptance under the assumption that the model would regenerate its own recorded output, which holds for the model that produced the traces up to bf16 noise. Sweep g ∈ {2, 3, 4} and n ∈ {3, 7, 15}. Report the mean accepted per verify, the fraction of steps with any proposal at all (hit rate), and the expected tokens per target forward. Proceed to S3 only if the best setting gives at least 2.0 expected tokens per forward on assistant tokens.
+
+```python
+def lookup(ids, t, g, n):
+    """Tokens that followed the most recent earlier occurrence of ids[t-g:t], up to n."""
+    if t < g:
+        return []
+    key = tuple(ids[t - g : t])
+    for s in range(t - g - 1, -1, -1):
+        if tuple(ids[s : s + g]) == key:
+            return list(ids[s + g : min(s + g + n, t)])
+    return []
+```
+(`ponytail:` a linear backward scan is O(T) per position. If a full session takes longer than a few minutes, replace it with a dict from g-gram to its last position, updated as t advances.)
+
+### Task S3: Prompt-lookup speculative decoding (lossless)
+
+**Files:** Modify `laguna_mlx/dflash.py`, adding `generate_lookup(target, prompt, max_tokens, eos=(), g=3, n_draft=7, prefill_step=2048)`; Test: `tests/test_dflash.py`.
+
+Same loop and cache bookkeeping as `generate_dflash`: `make_trimmable_cache`, verify `[token] + drafts` in one forward, greedy longest-prefix accept, `trim(n_draft - k)`. The differences:
+- Drafts come from `lookup` over `prompt + out` instead of a draft model.
+- With no proposal, fall back to a plain 1-token step.
+- The number of drafts is variable per step, so trim `len(drafts) - k`.
+
+Tests, mirroring `test_dflash.py`:
+- Lossless vs `generate_greedy` on the tiny peaky model with a repetitive prompt, so lookups actually hit.
+- Stops at EOS inside an accepted run, and at `max_tokens` mid-block.
+- Assert the stats show at least one multi-token acceptance.
+
+### Task S4: Prompt-lookup on real weights (overnight)
+
+**Files:** Create `scripts/bench_lookup.py`; output `results/lookup.json`.
+
+On both the resident and the streaming (slots=32) targets, time it on (i) the 10 `PROMPTS` and (ii) 5 real session prefixes (the last 8k tokens before an assistant turn), since agent contexts are where copying pays. Report the speedup vs `generate_greedy` on the same target and the mean accepted. Keep it if the speedup on (ii) is at least 1.1×.
+
+### Task S5: Streaming decode profile, then fix the dominant cost
+
+**Files:** Create `scripts/profile_stream.py`; output `results/stream_profile.json`.
+
+Decode speed is flat across slot budgets (Task 18), so SSD reads are not the bottleneck. Measure per decode step, summed over the 39 MoE layers:
+- (a) time blocked in `np.array(indices)` (GPU sync)
+- (b) Python time in `ExpertStore.load` excluding preads
+- (c) pread time
+- (d) everything else
+
+Use `time.perf_counter` around those spots via a subclass or monkeypatch in the script; don't edit `laguna_mlx/streaming.py`. Then pick the fix that targets the largest share:
+- If (a) dominates: overlap the host round-trip, e.g. compute next-layer routing speculatively from the current hidden state, or keep the expert→slot table on the GPU and only sync when a miss is possible.
+- If (b) dominates: vectorize the slot bookkeeping.
+
+Write the chosen fix as its own task, with a lossless test against resident (same tolerance as Task 17) and a before/after row in `results/stream_profile.json`.
