@@ -12,10 +12,15 @@ Part B: forward latency vs verify block length L, and draft.propose latency
 vs n_draft, timed on an (assumed) idle machine, with a linear fit
 ms ~= a + b*(L-1) over the verify-length medians.
 
-python3 -m scripts.diag_dflash [--target resident|streaming|both]
-Writes results/dflash_diag.json (merged in, one target's key at a time).
-Never holds both targets resident at once: each target is loaded, run, then
-deleted + mx.clear_cache()'d before the next.
+python3 -m scripts.diag_dflash [--target resident|streaming|both] [--skip-existing]
+Writes results/dflash_diag.json (merged in, one target's key at a time, via an
+atomic tmp-file-then-replace write). Part A's result for a target is saved to
+disk as soon as it's done, before Part B starts, so a Part B crash can't lose
+it -- Part B failures are caught and recorded as {"stopped": "partB error",
+"error": repr(e)} instead of aborting the run. --skip-existing (passed by the
+overnight runner) skips a target already fully present (equivalence +
+verify_ms) on disk. Never holds both targets resident at once: each target is
+loaded, run, then deleted + mx.clear_cache()'d before the next.
 """
 import argparse
 import json
@@ -109,6 +114,36 @@ def swap_gb():
     if not m:  # fail closed
         raise RuntimeError(f"could not parse `sysctl vm.swapusage` output: {out!r}")
     return float(m.group(1)) / 1024
+
+
+def _atomic_write_json(path, data):
+    """Write `data` as JSON to `path` without ever leaving a half-written
+    file there: write to a sibling .tmp file, then atomically replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=1))
+    tmp.replace(path)
+
+
+def _load_results():
+    return json.loads(OUT.read_text()) if OUT.exists() else {}
+
+
+def _save_target(name, result):
+    """Merge `result` into targets[name] of the on-disk results file and
+    atomically replace it. Safe to call mid-run (e.g. right after Part A,
+    before Part B starts) so a Part B crash never loses Part A's results."""
+    res = _load_results()
+    res.setdefault("targets", {})[name] = result
+    res["notes"] = NOTES
+    _atomic_write_json(OUT, res)
+    return res
+
+
+def _target_complete(name):
+    """True if targets[name] already has both Part A and Part B results."""
+    t = _load_results().get("targets", {}).get(name)
+    return bool(t) and "equivalence" in t and "verify_ms" in t
 
 
 def _timed_repeats(fn, warmup=WARMUP, repeats=REPEATS):
@@ -283,14 +318,21 @@ def _run_target(name):
         return result
     result["equivalence"] = _part_a(target, draft, tok)
     swap.append(("after_part_a", swap_gb()))
+    _save_target(name, result)  # persist Part A before Part B can crash it away
     if over("after_part_a"):
         del target, draft
         mx.clear_cache()
         return result
-    part_b = _part_b(target, draft, tok)
-    swap.append(("after_part_b", swap_gb()))
-    result.update({"verify_ms": part_b["verify_ms"], "fit": part_b["fit"],
-                   "propose_ms": part_b["propose_ms"]})
+    try:
+        part_b = _part_b(target, draft, tok)
+        swap.append(("after_part_b", swap_gb()))
+        result.update({"verify_ms": part_b["verify_ms"], "fit": part_b["fit"],
+                       "propose_ms": part_b["propose_ms"]})
+    except KeyboardInterrupt:
+        raise  # not an Exception subclass anyway, but explicit: never swallow this
+    except Exception as e:
+        result["stopped"] = "partB error"
+        result["error"] = repr(e)
     del target, draft
     mx.clear_cache()
     return result
@@ -299,16 +341,17 @@ def _run_target(name):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--target", choices=["resident", "streaming", "both"], default="both")
+    p.add_argument("--skip-existing", action="store_true",
+                    help="skip a target already fully present (equivalence + verify_ms) in "
+                         "results/dflash_diag.json")
     args = p.parse_args()
     targets = ["resident", "streaming"] if args.target == "both" else [args.target]
-    res = json.loads(OUT.read_text()) if OUT.exists() else {}
-    res.setdefault("targets", {})
-    res["notes"] = NOTES
     for name in targets:
+        if args.skip_existing and _target_complete(name):
+            print(f"=== {name} === skip (already complete)", flush=True)
+            continue
         print(f"=== {name} ===", flush=True)
-        res["targets"][name] = _run_target(name)
-        OUT.parent.mkdir(parents=True, exist_ok=True)
-        OUT.write_text(json.dumps(res, indent=1))
+        _save_target(name, _run_target(name))
         print(f"wrote {OUT} ({name})", flush=True)
 
 
