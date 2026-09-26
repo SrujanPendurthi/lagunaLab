@@ -111,13 +111,6 @@ def swap_gb():
     return float(m.group(1)) / 1024
 
 
-def _check_swap():
-    g = swap_gb()
-    if g > MAX_SWAP_GB:
-        raise RuntimeError(f"swap {g:.1f} GB > {MAX_SWAP_GB} GB")
-    return g
-
-
 def _timed_repeats(fn, warmup=WARMUP, repeats=REPEATS):
     for _ in range(warmup):
         fn()
@@ -263,21 +256,41 @@ def _load_target(name, slots=32):
 
 
 def _run_target(name):
+    """Stop-and-record (not crash) if swap crosses MAX_SWAP_GB at a checkpoint;
+    swap_gb() itself still fails closed (raises) if `sysctl` is unparseable."""
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
-    swap0 = _check_swap()
+    swap = [("start", swap_gb())]
+    result = {"swap_gb": swap, "stopped": None}
+
+    def over(stage):
+        if swap[-1][1] > MAX_SWAP_GB:
+            result["stopped"] = f"swap {swap[-1][1]:.1f} GB > {MAX_SWAP_GB} GB ({stage})"
+            return True
+        return False
+
+    if over("start"):
+        return result
     target, tok = _load_target(name)
     eos = tuple(tok.eos_token_ids)
     warm = tok.apply_chat_template([{"role": "user", "content": PROMPTS[0]}],
                                     add_generation_prompt=True, enable_thinking=False)
     generate_greedy(target, warm, 8, eos)  # warm-up
     draft = load_draft(DRAFT)
-    equivalence = _part_a(target, draft, tok)
-    swap1 = _check_swap()
+    swap.append(("loaded", swap_gb()))
+    if over("loaded"):
+        del target, draft
+        mx.clear_cache()
+        return result
+    result["equivalence"] = _part_a(target, draft, tok)
+    swap.append(("after_part_a", swap_gb()))
+    if over("after_part_a"):
+        del target, draft
+        mx.clear_cache()
+        return result
     part_b = _part_b(target, draft, tok)
-    swap2 = _check_swap()
-    result = {"equivalence": equivalence, "verify_ms": part_b["verify_ms"], "fit": part_b["fit"],
-              "propose_ms": part_b["propose_ms"],
-              "swap_gb": {"start": swap0, "after_part_a": swap1, "after_part_b": swap2}}
+    swap.append(("after_part_b", swap_gb()))
+    result.update({"verify_ms": part_b["verify_ms"], "fit": part_b["fit"],
+                   "propose_ms": part_b["propose_ms"]})
     del target, draft
     mx.clear_cache()
     return result
