@@ -1,4 +1,10 @@
 {
+ "notes": [
+  "identical_frac < 1 is attributed to bf16 logit near-ties between the greedy and batched-verify execution paths (hypothesis, pending results/dflash_diag.json S1 verification).",
+  "Each target's speedup is vs that target's own greedy baseline in the same process (resident vs resident, streaming vs streaming).",
+  "Timings may include noise from concurrent human activity on the machine.",
+  "Single run per setting; no repeats."
+ ],
  "resident": {
   "target": "resident",
   "slots": null,

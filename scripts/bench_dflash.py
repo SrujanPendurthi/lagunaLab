@@ -26,6 +26,12 @@ p.add_argument("--slots", type=int, default=32)
 p.add_argument("--max-swap-gb", type=float, default=10.0)
 a = p.parse_args()
 OUT = Path("results/dflash.json")
+NOTES = [
+    "identical_frac < 1 is attributed to bf16 logit near-ties between the greedy and batched-verify execution paths (hypothesis, pending results/dflash_diag.json S1 verification).",
+    "Each target's speedup is vs that target's own greedy baseline in the same process (resident vs resident, streaming vs streaming).",
+    "Timings may include noise from concurrent human activity on the machine.",
+    "Single run per setting; no repeats.",
+]
 DRAFT = "models/Laguna-XS-2.1-DFlash"
 
 mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
@@ -94,6 +100,7 @@ for bits in bits_list:
         break
 
 res = json.loads(OUT.read_text()) if OUT.exists() else {}
+res["notes"] = NOTES
 res[a.target] = {"target": a.target, "slots": a.slots if a.target == "streaming" else None,
                  "baseline_tok_s": base_tps, "baseline_per_prompt_tok_s": [b["tok_s"] for b in base],
                  "max_tokens": a.max_tokens, "peak_gpu_gb": mx.get_peak_memory() / 1e9,
