@@ -87,9 +87,15 @@ def _stamp(ref_paths):
 
 
 def sweep(model):
-    stats = load_stats(STATS_PATH)
     held = [REFS / f"{Path(f).stem}.npz" for f in HELDOUT]
     cal = [REFS / f"{Path(f).stem}.npz" for f in CALIB_EVAL]
+    missing = [str(p) for p in [STATS_PATH, *held, *cal] if not p.exists()]
+    if missing:
+        raise SystemExit(
+            "sweep can't run: missing " + ", ".join(missing) + ". Run "
+            "`python3 -m scripts.prune_sweep calibrate` if results/expert_stats.npz is missing, "
+            "then `python3 -m scripts.prune_sweep refs` for any missing refs/prune/*.npz.")
+    stats = load_stats(STATS_PATH)
     stamp = _stamp(held + cal)
     done = []
     if OUT.exists():

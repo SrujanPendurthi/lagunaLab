@@ -100,6 +100,16 @@ def test_calibrate_refs_sweep_end_to_end(model, tok, wired):
     assert before == after
 
 
+def test_sweep_without_refs_raises_clear_error(model, tok, wired):
+    cap = 512
+    ps.calibrate(model, tok, cap)  # stats present, but refs/prune/*.npz not built yet
+
+    with pytest.raises(SystemExit, match="scripts.prune_sweep refs"):
+        ps.sweep(model)
+
+    assert not ps.OUT.exists()  # nothing written before the precondition check
+
+
 def test_grid_priority_order():
     """The real (unpatched) GRID: baseline first, then reap/random/frequency uniform (all
     ratios), then reap global, then gate uniform last -- per the controller's priority ruling."""
