@@ -18,6 +18,8 @@ OVERNIGHT_SH = REPO_ROOT / "scripts" / "overnight.sh"
 
 NORMAL_SWAP = "vm.swapusage: total = 2048.00M  used = 606.50M  free = 1441.62M  (encrypted)"
 HIGH_SWAP = "vm.swapusage: total = 32768.00M  used = 15000.00M  free = 17768.00M  (encrypted)"
+HIGH_SWAP_G = "vm.swapusage: total = 32.00G  used = 11.50G  free = 20.50G  (encrypted)"
+LOW_SWAP_G = "vm.swapusage: total = 32.00G  used = 1.20G  free = 30.80G  (encrypted)"
 GARBAGE_SWAP = "vm.swapusage: kaboom"
 
 FULL_QUEUE = [
@@ -185,6 +187,23 @@ def test_refs_failure_stops_sweep_only(tmp_path):
     assert "SKIP p2_sweep" in log
 
 
+def test_s1_failure_does_not_block_chain_or_s4(tmp_path):
+    repo = make_repo(tmp_path)
+    py_log = tmp_path / "py.log"
+    bindir = make_bins(tmp_path, py_log)
+
+    result = run_overnight(repo, bindir, {"FAKE_PY_FAIL": "diag_dflash"})
+
+    assert result.returncode == 0
+    assert invocations(py_log) == FULL_QUEUE
+    log = queue_log_text(repo)
+    assert "END s1 exit=1" in log
+    assert "END p2_calib exit=0" in log
+    assert "END p2_refs exit=0" in log
+    assert "END p2_sweep exit=0" in log
+    assert "END s4 exit=0" in log
+
+
 # --------------------------------------------------------------- STOP file
 
 def test_stop_file_skips_remaining_steps(tmp_path):
@@ -200,9 +219,15 @@ def test_stop_file_skips_remaining_steps(tmp_path):
     assert result.returncode == 0
     assert invocations(py_log) == []
     log = queue_log_text(repo)
-    assert "SKIP s1" in log and "STOP file" in log
-    assert "SKIP p2_calib" in log
-    assert "SKIP s4" in log
+    assert "SKIP s1: STOP file present" in log
+    assert "SKIP p2_calib: STOP file present" in log
+    # p2_refs/p2_sweep never ran calibrate/refs -- the skip reason must be
+    # the halt, not the generic "predecessor did not succeed" text (that
+    # would wrongly imply calibrate/refs ran and failed).
+    assert "SKIP p2_refs: STOP file present" in log
+    assert "SKIP p2_sweep: STOP file present" in log
+    assert "did not succeed" not in log
+    assert "SKIP s4: STOP file present" in log
 
 
 # --------------------------------------------------------------- swap
@@ -219,7 +244,36 @@ def test_high_swap_skips_remaining_steps(tmp_path):
     log = queue_log_text(repo)
     assert "SKIP s1" in log
     assert "swap" in log.lower()
+    # Same halt-reason-wins requirement as the STOP-file case.
+    assert "SKIP p2_refs" in log and "swap" in log
+    assert "SKIP p2_sweep" in log and "swap" in log
+    assert "did not succeed" not in log
     assert "SKIP s4" in log
+
+
+def test_high_swap_g_unit_skips_remaining_steps(tmp_path):
+    repo = make_repo(tmp_path)
+    py_log = tmp_path / "py.log"
+    bindir = make_bins(tmp_path, py_log)
+
+    result = run_overnight(repo, bindir, {"FAKE_SWAP_OUTPUT": HIGH_SWAP_G})
+
+    assert result.returncode == 0
+    assert invocations(py_log) == []
+    log = queue_log_text(repo)
+    assert "SKIP s1" in log
+    assert "swap" in log.lower()
+
+
+def test_low_swap_g_unit_runs_normally(tmp_path):
+    repo = make_repo(tmp_path)
+    py_log = tmp_path / "py.log"
+    bindir = make_bins(tmp_path, py_log)
+
+    result = run_overnight(repo, bindir, {"FAKE_SWAP_OUTPUT": LOW_SWAP_G})
+
+    assert result.returncode == 0
+    assert invocations(py_log) == FULL_QUEUE
 
 
 def test_unparseable_swap_fails_closed(tmp_path):

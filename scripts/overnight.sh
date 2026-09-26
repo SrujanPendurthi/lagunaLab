@@ -68,7 +68,19 @@ check_gate() {
     fi
 }
 
-# run_step NAME CMD...  Returns CMD's exit code, or 1 if skipped.
+# run_step_body NAME CMD...  Runs unconditionally -- caller must already
+# know the gate is clear. Returns CMD's exit code.
+run_step_body() {
+    local name="$1"; shift
+    qlog "START $name: $*"
+    "$@" >"$LOG_DIR/$name.log" 2>&1
+    local code=$?
+    qlog "END $name exit=$code"
+    return "$code"
+}
+
+# run_step NAME CMD...  Checks the gate first; returns CMD's exit code, or
+# 1 if skipped.
 run_step() {
     local name="$1"; shift
     check_gate
@@ -76,11 +88,7 @@ run_step() {
         qlog "SKIP $name: $HALT_REASON"
         return 1
     fi
-    qlog "START $name: $*"
-    "$@" >"$LOG_DIR/$name.log" 2>&1
-    local code=$?
-    qlog "END $name exit=$code"
-    return "$code"
+    run_step_body "$name" "$@"
 }
 
 skip_step() {
@@ -99,19 +107,27 @@ if [ "$HALTED" -eq 1 ]; then
 elif [ -e "$STATS_FILE" ]; then
     skip_step p2_calib "$STATS_FILE already exists"
     calib_ok=1
-elif run_step p2_calib python3 -m scripts.prune_sweep calibrate; then
+elif run_step_body p2_calib python3 -m scripts.prune_sweep calibrate; then
     calib_ok=1
 fi
 
+# calib_ok can be 0 either because calibrate actually ran and failed, or
+# because the queue was already halted (STOP/swap) and calibrate never ran
+# -- HALT_REASON (not the generic predecessor-failure text) must win in the
+# latter case, or the log would imply a run that never happened.
 refs_ok=0
 if [ "$calib_ok" -eq 1 ]; then
     run_step p2_refs python3 -m scripts.prune_sweep refs && refs_ok=1
+elif [ "$HALTED" -eq 1 ]; then
+    skip_step p2_refs "$HALT_REASON"
 else
     skip_step p2_refs "prune_sweep calibrate did not succeed"
 fi
 
 if [ "$refs_ok" -eq 1 ]; then
     run_step p2_sweep python3 -m scripts.prune_sweep sweep
+elif [ "$HALTED" -eq 1 ]; then
+    skip_step p2_sweep "$HALT_REASON"
 else
     skip_step p2_sweep "prune_sweep refs did not succeed"
 fi
