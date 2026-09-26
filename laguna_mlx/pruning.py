@@ -119,3 +119,46 @@ def scores(stats, criterion, seed=0):
         else:
             raise ValueError(f"unknown criterion {criterion!r}")
     return out
+
+
+def keep_sets(sal, ratio, allocation="uniform", min_keep=16):
+    """Experts to keep per layer (sorted). ratio = fraction of experts pruned."""
+    if allocation == "uniform":
+        out = {}
+        for i, v in sal.items():
+            n = len(v) - int(round(ratio * len(v)))
+            out[i] = np.sort(np.argsort(-v, kind="stable")[:n])
+        return out
+    if allocation == "global":
+        total = sum(len(v) for v in sal.values())
+        budget = total - int(round(ratio * total))
+        if budget < min_keep * len(sal):
+            raise ValueError(f"budget {budget} below per-layer minimum {min_keep} x {len(sal)} layers")
+        norm = {i: v / max(float(v.sum()), 1e-12) for i, v in sal.items()}
+        order = {i: np.argsort(-norm[i], kind="stable") for i in sal}
+        keep = {i: list(order[i][:min_keep]) for i in sal}
+        rest = sorted(((norm[i][e], -i, -e) for i in sal for e in order[i][min_keep:]), reverse=True)
+        for _, ni, ne in rest[: budget - min_keep * len(sal)]:
+            keep[-ni].append(-ne)
+        return {i: np.sort(np.array(v, dtype=np.int64)) for i, v in keep.items()}
+    raise ValueError(f"unknown allocation {allocation!r}")
+
+
+def apply_mask(model, keep):
+    """Route only to kept experts: pruned experts' selection bias becomes -inf. Returns undo()."""
+    saved = {}
+    for i, k in keep.items():
+        mlp = model.layers[i].mlp
+        if len(k) < mlp.top_k:
+            raise ValueError(f"layer {i}: keeping {len(k)} experts < top_k {mlp.top_k}")
+        b = mlp.e_score_correction_bias
+        saved[i] = b
+        allowed = np.zeros(b.shape[0], bool)
+        allowed[np.asarray(k)] = True
+        mlp.e_score_correction_bias = mx.where(mx.array(allowed), b.astype(mx.float32), -mx.inf)
+
+    def undo():
+        for i, b in saved.items():
+            model.layers[i].mlp.e_score_correction_bias = b
+
+    return undo
