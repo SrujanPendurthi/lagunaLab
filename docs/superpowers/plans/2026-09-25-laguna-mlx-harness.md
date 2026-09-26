@@ -2852,3 +2852,63 @@ Expected: `results/streaming.json` with 5 rows. `identical_frac` == 1.0 for ever
 ```bash
 git add scripts/bench_stream.py results/streaming.json && git commit -m "feat: expert streaming benchmark on real weights"
 ```
+
+---
+
+### Task 8b: Capture sessions from the streaming MLX model (replaces Task 8's ollama backend)
+
+Why: ollama's Laguna (19.2 GB resident) pushed swap to 8.4 GB at 32k context on the 24 GB Mac. The streaming model (Task 17/18) serves the same weights at ~4.7 GB peak GPU, full-precision KV, 32k context, ~10 tok/s decode — and the sessions then come from the exact model replay uses. Human decision (2026-09-25): capture ~12 sessions tonight; speed work (DFlash, per-layer sync) tomorrow.
+
+**Files:**
+- Create: `scripts/serve_streaming.py`
+- Modify: `scripts/gen_traces.py` (backend wiring, timeout, `--n`)
+
+**Interfaces:**
+- Consumes: `load_streaming(pack_dir, slots)` (Task 17), `scripts/proxy.py`, `models/Laguna-XS-2.1-packed/` (Task 18), pool 1.0.16 (installed in Task 8).
+- Produces: `python3 -m scripts.serve_streaming --slots 32 --port 8081 [mlx_lm.server args]`.
+
+- [ ] **Step 1: Write `scripts/serve_streaming.py`**
+
+```python
+"""Serve the SSD-streaming Laguna model through mlx-lm's OpenAI-compatible server.
+
+python3 -m scripts.serve_streaming --slots 32 --port 8081 --prompt-cache-size 2
+mlx-lm infers the GLM-4.7 tool parser from Laguna's chat template (<arg_key> tags).
+"""
+import sys
+
+import mlx_lm.server as server
+
+import laguna_mlx  # noqa: F401
+from laguna_mlx.streaming import load_streaming
+
+PACK = "models/Laguna-XS-2.1-packed"
+
+
+def main():
+    slots = 32
+    if "--slots" in sys.argv:
+        i = sys.argv.index("--slots")
+        slots = int(sys.argv[i + 1])
+        del sys.argv[i : i + 2]
+    server.load = lambda *a, **k: load_streaming(PACK, slots)
+    if "--model" not in sys.argv:
+        sys.argv += ["--model", PACK]
+    server.main()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+- [ ] **Step 2: Check the server end to end before pool**
+
+Start it (`python3 -m scripts.serve_streaming --slots 32 --port 8081 --prompt-cache-size 2 > results/serve.log 2>&1 &`), wait for it to listen (first load ~85 s), then send one `/v1/chat/completions` request with a `tools` array (e.g. a `bash` tool with a `command` string parameter) asking to list files. Expected: the response message has a parsed `tool_calls` entry (not raw `<tool_call>` text in `content`) and reasoning is separated from content. If tool calls come back unparsed, check `tokenizer.has_tool_calling` / the inferred `tool_parser_type` before anything else.
+
+- [ ] **Step 3: Rewire `scripts/gen_traces.py`**
+
+Proxy listens on 11435 with upstream `http://127.0.0.1:8081`; pool env: `POOLSIDE_STANDALONE_BASE_URL=http://127.0.0.1:11435`, `POOLSIDE_API_KEY=EMPTY`, `POOLSIDE_STANDALONE_MODEL=<the id the server lists at /v1/models>`, `POOLSIDE_STANDALONE_CONTEXT_LENGTH=32768`. Per-task timeout 7200 s. Move the ollama smoke trace out of the way first (`mkdir -p traces_ollama && mv traces/* traces_ollama/`) so `traces/` holds only streaming-model sessions.
+
+- [ ] **Step 4: Smoke (1 task), then overnight (12 tasks)**
+
+`python3 -m scripts.gen_traces --n 1`: check coherent assistant turns and tool calls, swap stays low. Then `nohup python3 -m scripts.gen_traces --n 12 > traces/run.log 2>&1 &` and return without waiting. Commit `scripts/serve_streaming.py` and `scripts/gen_traces.py`.
