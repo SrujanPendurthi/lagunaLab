@@ -17,8 +17,10 @@ then decodes one token at a time -- see test_greedy_fast_matches_generate_greedy
 in tests/test_bench_lookup.py for the CPU/tiny-model equivalence check.
 
 The headline number is DECODE tok/s, lookup vs greedy_fast; end-to-end
-(prefill+decode) tok/s is also reported. Settings swept: g=4/n=7 fixed,
-g=4/n=15 adaptive (S2's best), and g=3/n=7 fixed as a sensitivity check.
+(prefill+decode) tok/s is also reported. Settings are swept PER TARGET (see
+SETTINGS below): resident sweeps g=4/n=7 fixed, g=4/n=15 adaptive (S2's
+best), g=3/n=7 fixed; streaming is restricted to short drafts (block <= 4
+tokens) to stay below its verify-cost cliff (see NOTES / results/dflash_diag.json).
 
 python3 -m scripts.bench_lookup [--target resident|streaming|both]
                                  [--max-tokens 256] [--slots 32]
@@ -65,13 +67,30 @@ PREFIX_TOKENS = 8192
 TOK_DIR = "models/Laguna-XS-2.1"
 RESIDENT_DIR = "models/Laguna-XS-2.1-mlx-4bit"
 PACK_DIR = "models/Laguna-XS-2.1-packed"
-# g=4/n=7 fixed and g=4/n=15 adaptive (S2's best offline setting), plus g=3/n=7
-# fixed as a sensitivity check (brief, controller additions 2026-09-26).
-SETTINGS = [
-    {"g": 4, "n_draft": 7, "adaptive": False},
-    {"g": 4, "n_draft": 15, "adaptive": True},
-    {"g": 3, "n_draft": 7, "adaptive": False},
-]
+# Settings are per target (single source of truth), not one shared list: resident sweeps
+# g=4/n=7 fixed, g=4/n=15 adaptive (S2's best offline setting), and g=3/n=7 fixed as a
+# sensitivity check (brief, controller additions 2026-09-26). streaming is restricted to
+# short drafts -- g=4/n=3 fixed, g=4/n=3 adaptive, g=4/n=2 fixed -- all with verify-block
+# length (1 + n_draft) <= 4 tokens, staying below the streaming verify-cost cliff measured
+# in results/dflash_diag.json (S1 follow-up, 2026-09-26): streaming's median verify_ms was
+# 37.8@block=1, 61.9@block=4, then 212.0@block=6 and 574.1@block=16 -- a cliff, not a curve,
+# because a block of >4 newly-drafted tokens routes up to 8 experts/token through a 32-slot
+# expert cache per layer, and once that exceeds 32 slots StreamingSwitchGLU needs multiple
+# masked passes (laguna_mlx/streaming.py's "a prefill chunk needing > slots experts runs
+# several masked passes" note) instead of one. Benchmarking streaming with n_draft=7/15
+# would only measure that cliff, not prompt-lookup's drafting benefit.
+SETTINGS = {
+    "resident": [
+        {"g": 4, "n_draft": 7, "adaptive": False},
+        {"g": 4, "n_draft": 15, "adaptive": True},
+        {"g": 3, "n_draft": 7, "adaptive": False},
+    ],
+    "streaming": [
+        {"g": 4, "n_draft": 3, "adaptive": False},
+        {"g": 4, "n_draft": 3, "adaptive": True},
+        {"g": 4, "n_draft": 2, "adaptive": False},
+    ],
+}
 # 5 sessions (3 astropy + 2 django), fixed rather than "first 5 of sorted(glob(...))" so the
 # mix isn't accidentally all-astropy (astropy sorts before django); reproducible either way.
 SESSION_FILES = [
@@ -106,6 +125,15 @@ NOTES = [
     "ending right before the start of the *last* assistant turn (replay.session tokenize's "
     "assistant mask) -- the context an agent had just before deciding what to write next, "
     "which is where prompt-lookup drafting is expected to pay off most.",
+    "Settings differ per target (see the top-level `settings` key): streaming is restricted "
+    "to short drafts (verify-block length <= 4 tokens: g=4/n=3 fixed, g=4/n=3 adaptive, "
+    "g=4/n=2 fixed), dropping the n=7/n=15 settings resident uses, because "
+    "results/dflash_diag.json measured a streaming verify-cost cliff, not a curve: median "
+    "verify_ms was 37.8@block=1, 61.9@block=4, then 212.0@block=6 and 574.1@block=16. A "
+    "block of drafted tokens > 4 can route more experts/token than the 32-slot expert cache "
+    "holds at once, forcing StreamingSwitchGLU into multiple masked passes per layer; "
+    "benchmarking streaming with n_draft=7/15 would measure that cliff, not prompt-lookup's "
+    "drafting benefit (S1 follow-up, 2026-09-26).",
     "Timings may include noise from concurrent human activity on the machine.",
     "Single run per setting; no repeats.",
 ]
@@ -170,10 +198,11 @@ def session_prefix(ids, mask, max_tokens=PREFIX_TOKENS):
     return ids[a:start]
 
 
-def _aggregate(rows):
-    """Per-setting means across a workload's items."""
+def _aggregate(rows, settings):
+    """Per-setting means across a workload's items. `settings` is that target's own
+    SETTINGS[name] list -- row["settings"][i] must line up with settings[i]."""
     out = []
-    for i, s in enumerate(SETTINGS):
+    for i, s in enumerate(settings):
         vals = [r["settings"][i] for r in rows if len(r["settings"]) > i]
         if not vals:
             continue
@@ -231,9 +260,14 @@ def _save_target(name, result):
 
 
 def _target_complete(name):
-    """True if targets[name] already ran to completion (both workloads, no stop)."""
+    """True if targets[name] already ran to completion (both workloads, no stop), using the
+    current SETTINGS[name] -- a settings change (e.g. this streaming-cliff follow-up) forces
+    a redo instead of --skip-existing silently treating stale-settings data as current."""
     t = _load_results().get(name)
-    return bool(t) and t.get("stopped") is None and "prompts" in t and "sessions" in t
+    if not t or t.get("stopped") is not None:
+        return False
+    settings = SETTINGS[name]
+    return all(t.get(label, {}).get("settings") == settings for label in ("prompts", "sessions"))
 
 
 # --------------------------------------------------------------------------
@@ -274,9 +308,10 @@ def _session_items():
     return items
 
 
-def _run_item(target, ids, max_tokens, eos):
-    """Time greedy_fast and each lookup setting on the same item, each against its own
-    prefill_s (see NOTES) -- not a shared or cross-call estimate."""
+def _run_item(target, ids, max_tokens, eos, settings):
+    """Time greedy_fast and each of `settings` (that target's own SETTINGS[name] list) on
+    the same item, each against its own prefill_s (see NOTES) -- not a shared or cross-call
+    estimate."""
     t0 = time.perf_counter()
     base_out, base_prefill_s = greedy_fast(target, ids, max_tokens, eos)
     base_total_s = time.perf_counter() - t0
@@ -286,7 +321,7 @@ def _run_item(target, ids, max_tokens, eos):
             "e2e_tok_s": len(base_out) / base_total_s}
 
     rows = []
-    for s in SETTINGS:
+    for s in settings:
         t2 = time.perf_counter()
         out, stats = generate_lookup(target, ids, max_tokens, eos, g=s["g"], n_draft=s["n_draft"],
                                       adaptive=s["adaptive"], prefill_step=PREFILL_STEP)
@@ -308,31 +343,38 @@ def _run_item(target, ids, max_tokens, eos):
     return base, rows
 
 
-def _existing_rows(result, label):
+def _existing_rows(result, label, settings):
     """{item_name: row} already completed for this (target, workload), from a result dict
-    possibly loaded from a previous, interrupted run."""
+    possibly loaded from a previous, interrupted run -- but only if that run used the same
+    `settings` list. Settings can change between runs (e.g. this streaming-cliff follow-up),
+    and a row's "settings" list is aligned by *index*, not by name; resuming under a
+    different settings list would silently pair old data at index i with a new, different
+    setting at index i. So a settings mismatch is treated as no prior data at all, not as
+    data to reuse."""
     w = result.get(label)
-    return {r["name"]: r for r in w["rows"]} if w else {}
+    if not w or w.get("settings") != settings:
+        return {}
+    return {r["name"]: r for r in w["rows"]}
 
 
-def _run_workload(name, result, target, items, max_tokens, eos, swap, over, label):
-    """Runs `items` not already present in result[label] (resumed from disk), saving to
-    results/lookup.json (atomic) after every item so a crash mid-workload only costs the
-    items not yet finished, not the whole target."""
-    done = _existing_rows(result, label)
+def _run_workload(name, result, target, items, max_tokens, eos, swap, over, label, settings):
+    """Runs `items` not already present in result[label] (resumed from disk, keyed against
+    `settings` -- see _existing_rows), saving to results/lookup.json (atomic) after every
+    item so a crash mid-workload only costs the items not yet finished, not the whole target."""
+    done = _existing_rows(result, label, settings)
     rows = list(done.values())
     for it in items:
         if it["name"] in done:
             continue
-        base, setting_rows = _run_item(target, it["ids"], max_tokens, eos)
+        base, setting_rows = _run_item(target, it["ids"], max_tokens, eos, settings)
         rows.append({"name": it["name"], "prompt_tokens": len(it["ids"]),
                      "baseline": base, "settings": setting_rows})
-        result[label] = {"rows": rows, "aggregate": _aggregate(rows)}
+        result[label] = {"rows": rows, "aggregate": _aggregate(rows, settings), "settings": settings}
         _save_target(name, result)  # checkpoint this item immediately
         swap.append((f"{label}:{it['name']}", swap_gb()))
         if over(f"{label}:{it['name']}"):
             break
-    result[label] = {"rows": rows, "aggregate": _aggregate(rows)}
+    result[label] = {"rows": rows, "aggregate": _aggregate(rows, settings), "settings": settings}
     return result[label]
 
 
@@ -341,9 +383,10 @@ def _run_target(name, args):
     results/lookup.json (per-item checkpointing: see _run_workload), then runs the rest."""
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     swap = [("start", swap_gb())]
+    settings = SETTINGS[name]
     prior = _load_results().get(name) or {}
     result = {"target": name, "slots": args.slots if name == "streaming" else None,
-              "max_tokens": args.max_tokens, "swap_gb": swap, "stopped": None,
+              "max_tokens": args.max_tokens, "settings": settings, "swap_gb": swap, "stopped": None,
               **{k: prior[k] for k in ("prompts", "sessions") if k in prior}}
 
     def over(stage):
@@ -364,7 +407,7 @@ def _run_target(name, args):
         mx.clear_cache()
         return result
 
-    _run_workload(name, result, target, prompt_items, args.max_tokens, eos, swap, over, "prompts")
+    _run_workload(name, result, target, prompt_items, args.max_tokens, eos, swap, over, "prompts", settings)
     result["peak_gpu_gb"] = mx.get_peak_memory() / 1e9
     _save_target(name, result)
     if result["stopped"]:
@@ -373,7 +416,7 @@ def _run_target(name, args):
         return result
 
     session_items = _session_items()
-    _run_workload(name, result, target, session_items, args.max_tokens, eos, swap, over, "sessions")
+    _run_workload(name, result, target, session_items, args.max_tokens, eos, swap, over, "sessions", settings)
     result["peak_gpu_gb"] = mx.get_peak_memory() / 1e9
     del target
     mx.clear_cache()

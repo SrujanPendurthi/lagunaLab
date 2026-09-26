@@ -82,22 +82,53 @@ def test_save_target_merges_and_target_complete(tmp_path, monkeypatch):
     out = tmp_path / "lookup.json"
     monkeypatch.setattr(bl, "OUT", out)
     assert bl._target_complete("resident") is False
-    bl._save_target("resident", {"prompts": {"rows": [], "aggregate": []},
-                                  "sessions": {"rows": [], "aggregate": []}, "stopped": None})
+    settings = bl.SETTINGS["resident"]
+    bl._save_target("resident", {"prompts": {"rows": [], "aggregate": [], "settings": settings},
+                                  "sessions": {"rows": [], "aggregate": [], "settings": settings},
+                                  "stopped": None})
     assert bl._target_complete("resident") is True
     assert bl._target_complete("streaming") is False
     res = bl._load_results()
-    assert res["resident"]["prompts"] == {"rows": [], "aggregate": []}
+    assert res["resident"]["prompts"] == {"rows": [], "aggregate": [], "settings": settings}
     assert "summary" in res and "notes" in res
 
 
 def test_target_complete_false_when_stopped(tmp_path, monkeypatch):
     out = tmp_path / "lookup.json"
     monkeypatch.setattr(bl, "OUT", out)
-    bl._save_target("resident", {"prompts": {"rows": [], "aggregate": []},
-                                  "sessions": {"rows": [], "aggregate": []},
+    settings = bl.SETTINGS["resident"]
+    bl._save_target("resident", {"prompts": {"rows": [], "aggregate": [], "settings": settings},
+                                  "sessions": {"rows": [], "aggregate": [], "settings": settings},
                                   "stopped": "swap 12.0 GB > 10.0 GB (loaded)"})
     assert bl._target_complete("resident") is False
+
+
+def test_target_complete_false_when_settings_dont_match_current(tmp_path, monkeypatch):
+    """A settings change (e.g. dropping streaming's n=7/15 settings for the verify-cost-cliff
+    follow-up) must force a redo, not let --skip-existing treat stale-settings data as done."""
+    out = tmp_path / "lookup.json"
+    monkeypatch.setattr(bl, "OUT", out)
+    old_settings = [{"g": 4, "n_draft": 7, "adaptive": False}]  # stale: not bl.SETTINGS["streaming"]
+    assert old_settings != bl.SETTINGS["streaming"]  # sanity: genuinely different from current
+    bl._save_target("streaming", {"prompts": {"rows": [], "aggregate": [], "settings": old_settings},
+                                   "sessions": {"rows": [], "aggregate": [], "settings": old_settings},
+                                   "stopped": None})
+    assert bl._target_complete("streaming") is False
+
+
+# --------------------------------------------------------- SETTINGS per target
+
+def test_settings_is_per_target_and_streaming_stays_below_the_cliff():
+    assert set(bl.SETTINGS) == {"resident", "streaming"}
+    resident_n = {s["n_draft"] for s in bl.SETTINGS["resident"]}
+    streaming_n = {s["n_draft"] for s in bl.SETTINGS["streaming"]}
+    assert resident_n == {7, 15}  # unchanged: g=4/n=7 fixed, g=4/n=15 adaptive, g=3/n=7 fixed
+    # streaming: every setting's verify-block length (1 + n_draft) stays <= 4 tokens, i.e.
+    # n_draft <= 3, below the measured verify-cost cliff (results/dflash_diag.json: 61.9ms at
+    # block=4 vs 212.0ms at block=6).
+    assert streaming_n == {3, 2}
+    assert all(s["n_draft"] <= 3 for s in bl.SETTINGS["streaming"])
+    assert bl.SETTINGS["resident"] != bl.SETTINGS["streaming"]
 
 
 def test_summarize_picks_best_setting_and_keep_threshold():
@@ -155,7 +186,8 @@ def test_run_item_timing_and_speedup_arithmetic(monkeypatch):
                          lambda target, ids, max_tokens, eos, g, n_draft, adaptive, prefill_step:
                              next(lookup_returns))
 
-    base, rows = bl._run_item(target=None, ids=[1, 2, 3], max_tokens=999, eos=())
+    settings = bl.SETTINGS["resident"]  # 3 settings, matching the 3 fake lookup_returns above
+    base, rows = bl._run_item(target=None, ids=[1, 2, 3], max_tokens=999, eos=(), settings=settings)
 
     assert base["tokens"] == 5 and base["prefill_s"] == 2.0
     assert base["total_s"] == pytest.approx(12.0) and base["decode_s"] == pytest.approx(10.0)
@@ -177,7 +209,7 @@ def test_run_item_timing_and_speedup_arithmetic(monkeypatch):
 
 
 def test_run_item_floors_decode_when_prefill_exceeds_total(monkeypatch):
-    monkeypatch.setattr(bl, "SETTINGS", [{"g": 4, "n_draft": 7, "adaptive": False}])
+    settings = [{"g": 4, "n_draft": 7, "adaptive": False}]  # a single setting is enough here
     monkeypatch.setattr(bl.time, "perf_counter", _fake_perf_counter([0.0, 4.0, 10.0, 10.5]))
     monkeypatch.setattr(bl, "greedy_fast", lambda target, ids, max_tokens, eos: (list(range(3)), 1.0))
     monkeypatch.setattr(bl, "generate_lookup", lambda *a, **k: (
@@ -185,34 +217,70 @@ def test_run_item_floors_decode_when_prefill_exceeds_total(monkeypatch):
         {"mean_accepted": 0.0, "steps": 1, "drafted": 0, "accepted": 0, "steps_with_draft": 0,
          "prefill_s": 3.0},  # total = 10.5 - 10 = 0.5 < prefill_s=3.0 -> would-be-negative decode_s
     ))
-    base, rows = bl._run_item(target=None, ids=[1], max_tokens=10, eos=())
+    base, rows = bl._run_item(target=None, ids=[1], max_tokens=10, eos=(), settings=settings)
     assert rows[0]["decode_s"] == pytest.approx(1e-9)
     assert rows[0]["decode_tok_s"] == pytest.approx(3 / 1e-9)
 
 
 # ------------------------------------------------------- _run_workload resume
 
+def _fake_setting_row(**over):
+    return {"g": 4, "n_draft": 3, "adaptive": False, "speedup_decode": 1.0, "speedup_e2e": 1.0,
+            "mean_accepted": 1.0, "identical": True, **over}
+
+
 def test_run_workload_resumes_and_skips_already_done_items(tmp_path, monkeypatch):
     out = tmp_path / "lookup.json"
     monkeypatch.setattr(bl, "OUT", out)
     monkeypatch.setattr(bl, "swap_gb", lambda: 0.0)
+    settings = bl.SETTINGS["streaming"]
     seen = []
 
-    def fake_run_item(target, ids, max_tokens, eos):
+    def fake_run_item(target, ids, max_tokens, eos, settings):
         seen.append(ids)
-        return {"tokens": len(ids)}, [{"g": 4, "n_draft": 7, "adaptive": False,
-                                        "speedup_decode": 1.0, "speedup_e2e": 1.0,
-                                        "mean_accepted": 1.0, "identical": True}]
+        return {"tokens": len(ids)}, [_fake_setting_row()]
 
     monkeypatch.setattr(bl, "_run_item", fake_run_item)
-    result = {"target": "resident", "prompts": {
-        "rows": [{"name": "p0", "prompt_tokens": 3, "baseline": {}, "settings": []}],
-        "aggregate": []}}
+    result = {"target": "streaming", "prompts": {
+        "rows": [{"name": "p0", "prompt_tokens": 3, "baseline": {}, "settings": [_fake_setting_row()]}],
+        "aggregate": [], "settings": settings}}
     items = [{"name": "p0", "ids": [1, 2, 3]}, {"name": "p1", "ids": [4, 5, 6]}]
     swap = [("start", 0.0)]
-    workload = bl._run_workload("resident", result, target=None, items=items, max_tokens=10,
-                                 eos=(), swap=swap, over=lambda stage: False, label="prompts")
-    assert seen == [[4, 5, 6]]  # p0 already done, so _run_item only ran for p1
+    workload = bl._run_workload("streaming", result, target=None, items=items, max_tokens=10,
+                                 eos=(), swap=swap, over=lambda stage: False, label="prompts",
+                                 settings=settings)
+    assert seen == [[4, 5, 6]]  # p0 already done under the *same* settings, so only p1 reruns
     assert [r["name"] for r in workload["rows"]] == ["p0", "p1"]
+    assert workload["settings"] == settings
     # the checkpoint written after p1 must be on disk (atomic save happened inside the loop)
-    assert [r["name"] for r in bl._load_results()["resident"]["prompts"]["rows"]] == ["p0", "p1"]
+    on_disk = bl._load_results()["streaming"]["prompts"]
+    assert [r["name"] for r in on_disk["rows"]] == ["p0", "p1"] and on_disk["settings"] == settings
+
+
+def test_run_workload_recomputes_when_settings_changed(tmp_path, monkeypatch):
+    """The resume key includes the settings list itself (see _existing_rows): a settings
+    change (this streaming-cliff follow-up dropped n=7/15 for streaming) must not resume p0's
+    row under the new settings as if it had been measured with them."""
+    out = tmp_path / "lookup.json"
+    monkeypatch.setattr(bl, "OUT", out)
+    monkeypatch.setattr(bl, "swap_gb", lambda: 0.0)
+    old_settings = [{"g": 4, "n_draft": 7, "adaptive": False}]  # stale
+    new_settings = bl.SETTINGS["streaming"]
+    seen = []
+
+    def fake_run_item(target, ids, max_tokens, eos, settings):
+        seen.append(ids)
+        assert settings == new_settings  # _run_item always gets the *current* settings
+        return {"tokens": len(ids)}, [_fake_setting_row()]
+
+    monkeypatch.setattr(bl, "_run_item", fake_run_item)
+    result = {"target": "streaming", "prompts": {
+        "rows": [{"name": "p0", "prompt_tokens": 3, "baseline": {}, "settings": [_fake_setting_row()]}],
+        "aggregate": [], "settings": old_settings}}
+    items = [{"name": "p0", "ids": [1, 2, 3]}]
+    swap = [("start", 0.0)]
+    workload = bl._run_workload("streaming", result, target=None, items=items, max_tokens=10,
+                                 eos=(), swap=swap, over=lambda stage: False, label="prompts",
+                                 settings=new_settings)
+    assert seen == [[1, 2, 3]]  # p0 recomputed: old row's settings don't match new_settings
+    assert workload["settings"] == new_settings
