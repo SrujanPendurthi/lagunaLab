@@ -139,3 +139,64 @@ def generate_dflash(target, draft, prompt, max_tokens, eos=(), n_draft=None, pre
             c.trim(n_draft - k)
         draft.add_context(draft.context_states([a[:, : k + 1] for a in aux]), dcache)
         token = g[k]
+
+
+class NgramIndex:
+    """Prompt-lookup drafter: g-gram -> most recent start, updated as tokens arrive.
+
+    `propose(n)` equals scanning back for the latest earlier occurrence of the last
+    g tokens and copying up to n tokens after it (never past the current end).
+    Only starts s <= len(ids) - g - 1 are indexed, so the key never matches itself.
+    """
+
+    def __init__(self, g):
+        self.g, self.ids, self.last = g, [], {}
+
+    def extend(self, tokens):
+        g, ids = self.g, self.ids
+        for t in tokens:
+            ids.append(t)
+            s = len(ids) - g - 1
+            if s >= 0:
+                self.last[tuple(ids[s : s + g])] = s
+
+    def propose(self, n):
+        t, g = len(self.ids), self.g
+        s = self.last.get(tuple(self.ids[t - g :])) if t >= g else None
+        return [] if s is None else self.ids[s + g : min(s + g + n, t)]
+
+
+def generate_lookup(target, prompt, max_tokens, eos=(), g=4, n_draft=7, adaptive=False, prefill_step=2048):
+    """Greedy prompt-lookup speculative decoding; output equals generate_greedy.
+
+    adaptive: cap each draft at min(n_draft, 1 + previous step's accepted count).
+    """
+    prompt = [int(t) for t in prompt]  # accept numpy ints
+    cache = make_trimmable_cache(target, slack=n_draft + 1)
+    for a in range(0, len(prompt), prefill_step):
+        logits = target(mx.array([prompt[a : a + prefill_step]]), cache=cache)[0]
+    token = int(mx.argmax(logits[-1]))
+    index = NgramIndex(g)
+    index.extend(prompt + [token])  # ids = prompt + emitted + pending token
+    out, cap = [], n_draft
+    stats = {"steps": 0, "drafted": 0, "accepted": 0, "steps_with_draft": 0}
+    while True:
+        drafts = index.propose(cap)  # [] -> plain 1-token step
+        pred = mx.argmax(target(mx.array([[token] + drafts]), cache=cache)[0], axis=-1).tolist()
+        k = 0
+        while k < len(drafts) and drafts[k] == pred[k]:
+            k += 1
+        stats["steps"] += 1
+        stats["drafted"] += len(drafts)
+        stats["accepted"] += k
+        stats["steps_with_draft"] += bool(drafts)
+        for t in [token] + drafts[:k]:
+            out.append(t)
+            if t in eos or len(out) >= max_tokens:
+                return out, {**stats, "mean_accepted": stats["accepted"] / stats["steps"]}
+        for c in cache:
+            c.trim(len(drafts) - k)
+        token = pred[k]
+        index.extend(drafts[:k] + [token])
+        if adaptive:
+            cap = min(n_draft, 1 + k)
