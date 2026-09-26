@@ -179,3 +179,31 @@ def apply_mask(model, keep):
             model.layers[i].mlp.e_score_correction_bias = b
 
     return undo
+
+
+_EXPERT_KEY = re.compile(
+    r"model\.layers\.(\d+)\.mlp\.(?:switch_mlp\.\w+\.(?:weight|scales|biases)"
+    r"|gate\.(?:weight|scales|biases)|e_score_correction_bias)$"
+)
+
+
+def prune_checkpoint(model_dir, keep, out_dir):
+    """Write a smaller MLX checkpoint keeping only `keep[layer]` experts (uniform count)."""
+    model_dir, out_dir = Path(model_dir), Path(out_dir)
+    counts = {len(v) for v in keep.values()}
+    if len(counts) != 1:
+        raise ValueError("prune_checkpoint supports uniform keep-sets only")
+    out_dir.mkdir(parents=True)
+    idx = {i: mx.array(np.asarray(v)) for i, v in keep.items()}
+    for f in sorted(glob.glob(str(model_dir / "*.safetensors"))):
+        out = {}
+        for key, a in mx.load(f).items():
+            m = _EXPERT_KEY.match(key)
+            out[key] = a[idx[int(m.group(1))]] if m and int(m.group(1)) in idx else a
+        mx.save_safetensors(str(out_dir / Path(f).name), out, metadata={"format": "mlx"})
+    config = json.loads((model_dir / "config.json").read_text())
+    config["num_experts"] = counts.pop()
+    (out_dir / "config.json").write_text(json.dumps(config, indent=1))
+    for f in model_dir.iterdir():
+        if f.suffix in (".json", ".jinja") and f.name not in ("config.json", "model.safetensors.index.json"):
+            shutil.copy(f, out_dir / f.name)

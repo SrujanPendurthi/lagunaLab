@@ -1,10 +1,20 @@
 import mlx.core as mx
 import numpy as np
 import pytest
+from mlx_lm.utils import load_model
 
+import laguna_mlx  # noqa: F401
 from laguna_mlx.hooks import RoutingRecorder
-from laguna_mlx.pruning import ExpertSaliencyRecorder, accumulate, apply_mask, keep_sets, load_stats, scores
-from tests.tiny import TINY, mlx_model, torch_model
+from laguna_mlx.pruning import (
+    ExpertSaliencyRecorder,
+    accumulate,
+    apply_mask,
+    keep_sets,
+    load_stats,
+    prune_checkpoint,
+    scores,
+)
+from tests.tiny import TINY, mlx_model, quantized_model_dir, torch_model
 
 E, K = TINY["num_experts"], TINY["num_experts_per_tok"]
 
@@ -143,3 +153,23 @@ def test_mask_validates_all_layers_before_mutating_any():
     for i, b in before_bias.items():
         np.testing.assert_array_equal(np.array(m.layers[i].mlp.e_score_correction_bias), b)
     np.testing.assert_array_equal(np.array(m(ids)), before_logits)
+
+
+def test_materialized_checkpoint_matches_masked_model(tmp_path):
+    d, m = quantized_model_dir(tmp_path)
+    keep = {i: np.array([0, 2, 3, 6, 7]) for i in (1, 2, 3)}
+    out = tmp_path / "pruned"
+    prune_checkpoint(d, keep, out)
+    pruned, _ = load_model(out)
+    ids = _ids(20, seed=5)
+    undo = apply_mask(m, keep)
+    want = np.array(m(ids))
+    undo()
+    np.testing.assert_allclose(np.array(pruned(ids)), want, atol=1e-5, rtol=1e-5)
+    assert pruned.args.num_experts == 5
+
+
+def test_prune_checkpoint_rejects_non_uniform(tmp_path):
+    d, _ = quantized_model_dir(tmp_path)
+    with pytest.raises(ValueError):
+        prune_checkpoint(d, {1: np.arange(5), 2: np.arange(6), 3: np.arange(5)}, tmp_path / "x")
