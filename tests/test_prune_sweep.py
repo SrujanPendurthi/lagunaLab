@@ -98,3 +98,57 @@ def test_calibrate_refs_sweep_end_to_end(model, tok, wired):
     ps.sweep(model)
     after = json.loads(ps.OUT.read_text())
     assert before == after
+
+
+def test_grid_priority_order():
+    """The real (unpatched) GRID: baseline first, then reap/random/frequency uniform (all
+    ratios), then reap global, then gate uniform last -- per the controller's priority ruling."""
+    ratios = ps.RATIOS
+    expected = ([("reap", "uniform", r) for r in ratios]
+                + [("random", "uniform", r) for r in ratios]
+                + [("frequency", "uniform", r) for r in ratios]
+                + [("reap", "global", r) for r in (0.25, 0.5)]
+                + [("gate", "uniform", r) for r in ratios])
+    assert ps.GRID == expected
+
+
+def test_baseline_sanity_check_saves_row_then_exits(model, tok, wired, monkeypatch):
+    cap = 512
+    ps.calibrate(model, tok, cap)
+    ps.refs(model, tok, cap)
+
+    def fake_score(model, ref_path, chunk=2048):
+        return {"tokens": 10, "assistant_tokens": 10, "truncated": False,
+                "kl_top64_mean": 1.0, "kl_top64_p99": 1.0, "top1_agree": 0.0,
+                "peak_mem_gb": 0.0, "tok_per_s": 1.0}
+
+    monkeypatch.setattr(ps, "score", fake_score)
+
+    with pytest.raises(SystemExit, match="baseline sanity check failed"):
+        ps.sweep(model)
+
+    assert ps.OUT.exists()  # the bad baseline row was still saved
+    data = json.loads(ps.OUT.read_text())
+    assert len(data["rows"]) == 1
+    assert data["rows"][0]["criterion"] == "none"
+    assert data["rows"][0]["heldout"]["kl_mean"] == 1.0
+
+
+def test_stale_stamp_refuses_resume(model, tok, wired):
+    cap = 512
+    ps.calibrate(model, tok, cap)
+    ps.refs(model, tok, cap)
+    ps.sweep(model)
+    good = json.loads(ps.OUT.read_text())
+
+    # recalibrate on fewer sessions: same paths, genuinely different stats.npz content/hash
+    old_calib = list(ps.CALIB)
+    ps.CALIB = old_calib[:1]
+    ps.calibrate(model, tok, cap)
+
+    with pytest.raises(SystemExit, match="move it aside"):
+        ps.sweep(model)
+
+    # pruning.json from the earlier, valid run must be untouched
+    assert json.loads(ps.OUT.read_text()) == good
+    ps.CALIB = old_calib

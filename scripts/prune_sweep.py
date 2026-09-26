@@ -6,6 +6,7 @@ python3 -m scripts.prune_sweep sweep       # criteria x ratios -> results/prunin
 """
 import argparse
 import glob
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -30,12 +31,17 @@ STATS_META_PATH = Path("results/expert_stats_meta.json")
 # keep_sets(..., allocation="global") per-layer floor. 16 is sized for the real model's expert
 # count; a model with fewer experts per layer (e.g. the tiny test model) needs a smaller value.
 GLOBAL_MIN_KEEP = 16
-GRID = ([(c, "uniform", r) for c in ("reap", "frequency", "gate", "random")
-         for r in (0.125, 0.25, 0.375, 0.5, 0.625)]
-        + [("reap", "global", r) for r in (0.25, 0.5)])
+# Priority order (controller ruling): baseline, then reap/random/frequency uniform across all
+# ratios, then reap global, then gate uniform last -- gate is the weakest prior of the four.
+RATIOS = (0.125, 0.25, 0.375, 0.5, 0.625)
+GRID = ([(c, "uniform", r) for c in ("reap", "random", "frequency") for r in RATIOS]
+        + [("reap", "global", r) for r in (0.25, 0.5)]
+        + [("gate", "uniform", r) for r in RATIOS])
 
 
 def calibrate(model, tok, cap, chunk=2048):
+    # n counts every token in each session (system prompt, tools, user, assistant) -- routing,
+    # and so saliency, happens on every position, not only on assistant-generated tokens.
     t0, n = time.perf_counter(), 0
     with ExpertSaliencyRecorder(model) as rec:
         for f in CALIB:
@@ -71,12 +77,31 @@ def _aggregate(rows):
             "assistant_tokens": int(w.sum())}
 
 
+def _stamp(ref_paths):
+    """Identity of the stats/refs a sweep run was built on: catches stale resumes."""
+    meta = json.loads(STATS_META_PATH.read_text()) if STATS_META_PATH.exists() else {}
+    refs_info = sorted(({"name": p.name, "size": p.stat().st_size} for p in ref_paths),
+                        key=lambda d: d["name"])
+    return {"stats_sha256": hashlib.sha256(STATS_PATH.read_bytes()).hexdigest(),
+            "refs": refs_info, "cap": meta.get("cap")}
+
+
 def sweep(model):
     stats = load_stats(STATS_PATH)
-    done = json.loads(OUT.read_text())["rows"] if OUT.exists() else []
-    have = {(r["criterion"], r["allocation"], r["ratio"]) for r in done}
     held = [REFS / f"{Path(f).stem}.npz" for f in HELDOUT]
     cal = [REFS / f"{Path(f).stem}.npz" for f in CALIB_EVAL]
+    stamp = _stamp(held + cal)
+    done = []
+    if OUT.exists():
+        prev = json.loads(OUT.read_text())
+        if prev.get("stamp") != stamp:
+            raise SystemExit(
+                f"{OUT} was built from different stats/refs than what's on disk now (stats hash, "
+                "ref file sizes, or calibration cap changed) -- move it aside, e.g. "
+                f"`mv {OUT} {OUT}.bak`, and rerun the sweep from scratch, or restore the stats/refs "
+                "it was built from.")
+        done = prev["rows"]
+    have = {(r["criterion"], r["allocation"], r["ratio"]) for r in done}
     for crit, alloc, ratio in [("none", "uniform", 0.0)] + GRID:
         if (crit, alloc, ratio) in have:
             continue
@@ -96,9 +121,14 @@ def sweep(model):
         row["seconds"] = time.perf_counter() - t0
         done.append(row)
         tmp = OUT.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"model": MODEL, "rows": done}, indent=1))
+        tmp.write_text(json.dumps({"model": MODEL, "stamp": stamp, "rows": done}, indent=1))
         tmp.replace(OUT)  # atomic: an interrupt never leaves a half-written file
         print(crit, alloc, ratio, row["heldout"], f"{row['seconds']:.0f}s", flush=True)
+        if crit == "none" and (row["heldout"]["kl_mean"] >= 1e-5 or row["heldout"]["top1"] != 1.0):
+            raise SystemExit(
+                f"baseline sanity check failed: heldout kl_mean={row['heldout']['kl_mean']!r}, "
+                f"top1={row['heldout']['top1']!r} (want < 1e-5 and == 1.0) -- the evaluation path "
+                f"is nondeterministic. The row was saved to {OUT}; investigate before sweeping further.")
 
 
 def main():
