@@ -1,0 +1,77 @@
+{
+ "rows": [
+  {
+   "label": "slots=16",
+   "decode_tok_s": 10.650684316342138,
+   "prefill_tok_s": 52.16833092444027,
+   "peak_gpu_gb": 3.700658164,
+   "max_rss_gb": 2.422194176,
+   "swap_gb_after": 1.2475,
+   "slots": 16,
+   "hits": 50777,
+   "misses": 110906,
+   "hit_rate": 0.3140528070359902,
+   "bytes_read": 196245061632,
+   "prefill_16k_tok_s": 30.592220533692856,
+   "decode_16k_tok_s": 4.420562750810327,
+   "ctx_tokens": 16000,
+   "identical_frac": 0.0
+  },
+  {
+   "label": "slots=32",
+   "decode_tok_s": 10.050918557494148,
+   "prefill_tok_s": 71.01839075532074,
+   "peak_gpu_gb": 4.656508494,
+   "max_rss_gb": 2.47291904,
+   "swap_gb_after": 1.231875,
+   "slots": 32,
+   "hits": 65520,
+   "misses": 96163,
+   "hit_rate": 0.40523740900403876,
+   "bytes_read": 170157735936,
+   "prefill_16k_tok_s": 47.610560629244084,
+   "decode_16k_tok_s": 4.400059115462045,
+   "ctx_tokens": 16000,
+   "identical_frac": 0.0
+  },
+  {
+   "label": "slots=64",
+   "decode_tok_s": 9.922291735374223,
+   "prefill_tok_s": 90.0505165307208,
+   "peak_gpu_gb": 7.060721006,
+   "max_rss_gb": 2.47291904,
+   "swap_gb_after": 1.2240625,
+   "slots": 64,
+   "hits": 85261,
+   "misses": 76422,
+   "hit_rate": 0.527334351787139,
+   "bytes_read": 135226589184,
+   "identical_frac": 0.0
+  },
+  {
+   "label": "slots=128",
+   "decode_tok_s": 9.67667772212471,
+   "prefill_tok_s": 115.44221345916381,
+   "peak_gpu_gb": 12.795770526,
+   "max_rss_gb": 2.47291904,
+   "swap_gb_after": 0.90912109375,
+   "slots": 128,
+   "hits": 118736,
+   "misses": 42928,
+   "hit_rate": 0.7344615993665875,
+   "bytes_read": 75959894016,
+   "identical_frac": 0.6666666666666666
+  },
+  {
+   "label": "resident",
+   "decode_tok_s": 18.596879224219247,
+   "prefill_tok_s": 40.57565950820896,
+   "peak_gpu_gb": 19.810651056,
+   "max_rss_gb": 9.20846336,
+   "swap_gb_after": 3.24365234375
+  }
+ ],
+ "notes": [
+  "first streaming run (slots=16): packing just wrote the 18 GB pack dir seconds earlier, so macOS page cache was very likely already warm for it; no cache purge was performed (would need sudo)."
+ ]
+}
