@@ -24,15 +24,16 @@ def target():
 @pytest.mark.parametrize("max_tokens,prefill_step", [(30, 2048), (30, 5), (1, 2048), (17, 4)])
 def test_greedy_fast_matches_generate_greedy(target, max_tokens, prefill_step):
     want = generate_greedy(target, PROMPT, max_tokens)
-    got = greedy_fast(target, PROMPT, max_tokens, prefill_step=prefill_step)
+    got, prefill_s = greedy_fast(target, PROMPT, max_tokens, prefill_step=prefill_step)
     assert got == want
+    assert prefill_s > 0
 
 
 def test_greedy_fast_respects_eos(target):
     free = generate_greedy(target, PROMPT, 30)
     eos = (free[5],)
     want = generate_greedy(target, PROMPT, 30, eos=eos)
-    got = greedy_fast(target, PROMPT, 30, eos=eos)
+    got, _prefill_s = greedy_fast(target, PROMPT, 30, eos=eos)
     assert got == want and got[-1] == eos[0]
 
 
@@ -126,3 +127,92 @@ def test_summarize_handles_missing_sessions():
     res = {"resident": {"stopped": "swap high"}}
     s = bl._summarize(res)
     assert s == {"by_target_setting": [], "best": None, "keep": False}
+
+
+# ------------------------------------------------------- _run_item arithmetic
+
+def _fake_perf_counter(seq):
+    it = iter(seq)
+    return lambda: next(it)
+
+
+def test_run_item_timing_and_speedup_arithmetic(monkeypatch):
+    # 8 perf_counter() calls: (t0,t1) for the baseline, then (t2,t3) per of the 3 settings.
+    monkeypatch.setattr(bl.time, "perf_counter",
+                         _fake_perf_counter([0.0, 12.0, 100.0, 108.0, 200.0, 210.0, 300.0, 306.0]))
+    # baseline: 5 tokens, prefill_s=2.0, total=12-0=12 -> decode_s=10, decode_tok_s=0.5, e2e=5/12
+    monkeypatch.setattr(bl, "greedy_fast", lambda target, ids, max_tokens, eos: (list(range(5)), 2.0))
+
+    lookup_returns = iter([
+        (list(range(8)), {"mean_accepted": 1.0, "steps": 4, "drafted": 12, "accepted": 4,
+                           "steps_with_draft": 3, "prefill_s": 3.0}),   # total=8-0=8 -> decode_s=5
+        (list(range(10)), {"mean_accepted": 2.0, "steps": 5, "drafted": 20, "accepted": 8,
+                            "steps_with_draft": 4, "prefill_s": 4.0}),  # total=10 -> decode_s=6
+        (list(range(5)), {"mean_accepted": 0.5, "steps": 5, "drafted": 10, "accepted": 2,
+                           "steps_with_draft": 2, "prefill_s": 5.0}),   # total=6 -> decode_s=1
+    ])
+    monkeypatch.setattr(bl, "generate_lookup",
+                         lambda target, ids, max_tokens, eos, g, n_draft, adaptive, prefill_step:
+                             next(lookup_returns))
+
+    base, rows = bl._run_item(target=None, ids=[1, 2, 3], max_tokens=999, eos=())
+
+    assert base["tokens"] == 5 and base["prefill_s"] == 2.0
+    assert base["total_s"] == pytest.approx(12.0) and base["decode_s"] == pytest.approx(10.0)
+    assert base["decode_tok_s"] == pytest.approx(0.5) and base["e2e_tok_s"] == pytest.approx(5 / 12)
+
+    r0, r1, r2 = rows
+    assert r0["total_s"] == pytest.approx(8.0) and r0["prefill_s"] == 3.0
+    assert r0["decode_s"] == pytest.approx(5.0) and r0["decode_tok_s"] == pytest.approx(8 / 5)
+    assert r0["speedup_decode"] == pytest.approx((8 / 5) / 0.5)
+    assert r0["e2e_tok_s"] == pytest.approx(8 / 8)
+    assert r0["speedup_e2e"] == pytest.approx((8 / 8) / (5 / 12))
+    assert r0["identical"] is False  # base_out has 5 tokens, r0's out has 8
+
+    assert r1["decode_s"] == pytest.approx(6.0) and r1["decode_tok_s"] == pytest.approx(10 / 6)
+
+    assert r2["decode_s"] == pytest.approx(1.0) and r2["decode_tok_s"] == pytest.approx(5.0)
+    assert r2["identical"] is True  # both base_out and r2's out are range(5)
+    assert r2["first_divergence"] is None
+
+
+def test_run_item_floors_decode_when_prefill_exceeds_total(monkeypatch):
+    monkeypatch.setattr(bl, "SETTINGS", [{"g": 4, "n_draft": 7, "adaptive": False}])
+    monkeypatch.setattr(bl.time, "perf_counter", _fake_perf_counter([0.0, 4.0, 10.0, 10.5]))
+    monkeypatch.setattr(bl, "greedy_fast", lambda target, ids, max_tokens, eos: (list(range(3)), 1.0))
+    monkeypatch.setattr(bl, "generate_lookup", lambda *a, **k: (
+        list(range(3)),
+        {"mean_accepted": 0.0, "steps": 1, "drafted": 0, "accepted": 0, "steps_with_draft": 0,
+         "prefill_s": 3.0},  # total = 10.5 - 10 = 0.5 < prefill_s=3.0 -> would-be-negative decode_s
+    ))
+    base, rows = bl._run_item(target=None, ids=[1], max_tokens=10, eos=())
+    assert rows[0]["decode_s"] == pytest.approx(1e-9)
+    assert rows[0]["decode_tok_s"] == pytest.approx(3 / 1e-9)
+
+
+# ------------------------------------------------------- _run_workload resume
+
+def test_run_workload_resumes_and_skips_already_done_items(tmp_path, monkeypatch):
+    out = tmp_path / "lookup.json"
+    monkeypatch.setattr(bl, "OUT", out)
+    monkeypatch.setattr(bl, "swap_gb", lambda: 0.0)
+    seen = []
+
+    def fake_run_item(target, ids, max_tokens, eos):
+        seen.append(ids)
+        return {"tokens": len(ids)}, [{"g": 4, "n_draft": 7, "adaptive": False,
+                                        "speedup_decode": 1.0, "speedup_e2e": 1.0,
+                                        "mean_accepted": 1.0, "identical": True}]
+
+    monkeypatch.setattr(bl, "_run_item", fake_run_item)
+    result = {"target": "resident", "prompts": {
+        "rows": [{"name": "p0", "prompt_tokens": 3, "baseline": {}, "settings": []}],
+        "aggregate": []}}
+    items = [{"name": "p0", "ids": [1, 2, 3]}, {"name": "p1", "ids": [4, 5, 6]}]
+    swap = [("start", 0.0)]
+    workload = bl._run_workload("resident", result, target=None, items=items, max_tokens=10,
+                                 eos=(), swap=swap, over=lambda stage: False, label="prompts")
+    assert seen == [[4, 5, 6]]  # p0 already done, so _run_item only ran for p1
+    assert [r["name"] for r in workload["rows"]] == ["p0", "p1"]
+    # the checkpoint written after p1 must be on disk (atomic save happened inside the loop)
+    assert [r["name"] for r in bl._load_results()["resident"]["prompts"]["rows"]] == ["p0", "p1"]

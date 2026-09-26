@@ -8,6 +8,7 @@ References: vLLM PR #46853 (laguna_dflash.py, qwen3_dflash.py);
 speculators/models/dflash/core.py (training-time alignment).
 """
 import json
+import time
 from pathlib import Path
 
 import mlx.core as mx
@@ -170,13 +171,20 @@ def generate_lookup(target, prompt, max_tokens, eos=(), g=4, n_draft=7, adaptive
     """Greedy prompt-lookup speculative decoding; output equals generate_greedy.
 
     adaptive: cap each draft at min(n_draft, 1 + previous step's accepted count).
+    stats["prefill_s"] is this call's own prefill wall time (perf_counter, chunked
+    last-position-logits prefill through mx.eval of the final chunk) -- an additive,
+    read-only timing stat with no effect on tokens or acceptance; added so callers can
+    split prefill from decode cost using this call's own timing instead of a different
+    call's (Task S4 review, round 1).
     """
     prompt = [int(t) for t in prompt]  # accept numpy ints
     cache = make_trimmable_cache(target, slack=n_draft + 1)
+    t0 = time.perf_counter()
     for a in range(0, len(prompt), prefill_step):
         h = target.model(mx.array([prompt[a : a + prefill_step]]), cache=cache)
         logits = target.lm_head(h[0, -1])  # last position only: no [chunk, vocab] logits
         mx.eval(logits)  # materialize this chunk's KV so the graph doesn't span the whole prompt
+    prefill_s = time.perf_counter() - t0
     token = int(mx.argmax(logits))
     index = NgramIndex(g)
     index.extend(prompt + [token])  # ids = prompt + emitted + pending token
@@ -195,7 +203,8 @@ def generate_lookup(target, prompt, max_tokens, eos=(), g=4, n_draft=7, adaptive
         for t in [token] + drafts[:k]:
             out.append(t)
             if t in eos or len(out) >= max_tokens:
-                return out, {**stats, "mean_accepted": stats["accepted"] / stats["steps"]}
+                return out, {**stats, "mean_accepted": stats["accepted"] / stats["steps"],
+                             "prefill_s": prefill_s}
         for c in cache:
             c.trim(len(drafts) - k)
         token = pred[k]

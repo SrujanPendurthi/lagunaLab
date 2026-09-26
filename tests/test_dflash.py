@@ -144,6 +144,14 @@ def test_lookup_random_prompt_is_lossless(target):
     assert got == want and stats["steps"] > 0
 
 
+def test_lookup_reports_prefill_s(target):
+    """prefill_s is an additive timing stat: present, positive, and doesn't change output."""
+    want = generate_greedy(target, PROMPT, 30)
+    got, stats = generate_lookup(target, PROMPT, 30)
+    assert got == want
+    assert stats["prefill_s"] > 0
+
+
 @pytest.fixture
 def oracle(monkeypatch):
     """Make NgramIndex propose the true greedy continuation (corrupted from slot `wrong` on)."""

@@ -24,14 +24,17 @@ python3 -m scripts.bench_lookup [--target resident|streaming|both]
                                  [--max-tokens 256] [--slots 32]
                                  [--max-swap-gb 10] [--skip-existing]
 
-Writes results/lookup.json incrementally (one target's key at a time, via an
-atomic tmp-file-then-replace write) so a crash never loses a finished target,
-or even a finished workload (prompts vs sessions) within a target. Never
-holds both targets resident at once: each target is loaded, run, then
-deleted + mx.clear_cache()'d before the next. Swap is checked after every
-workload item and fails closed (an unparseable `sysctl` reading raises,
-rather than looking like "no swap pressure"); crossing --max-swap-gb stops
-and records rather than crashing or silently truncating.
+Writes results/lookup.json incrementally: after every single workload item
+(one PROMPTS entry or one session prefix), not just once per target or once
+per workload, via an atomic tmp-file-then-replace write, so a crash loses at
+most the one item in flight. Re-running (with or without --skip-existing)
+resumes a target from whichever items are already on disk for it -- the
+model is still loaded only once per target. Never holds both targets
+resident at once: each target is loaded, run, then deleted + mx.clear_cache()'d
+before the next. Swap is checked after every workload item and fails closed
+(an unparseable `sysctl` reading raises, rather than looking like "no swap
+pressure"); crossing --max-swap-gb stops and records rather than crashing or
+silently truncating.
 
 Nothing above the `if __name__ == "__main__":` guard loads a model, a
 tokenizer, or a trace file -- `python3 -c "import scripts.bench_lookup"` is
@@ -69,7 +72,8 @@ SETTINGS = [
     {"g": 4, "n_draft": 15, "adaptive": True},
     {"g": 3, "n_draft": 7, "adaptive": False},
 ]
-# 5 sessions, mixing astropy/django, fixed so the run is reproducible.
+# 5 sessions (3 astropy + 2 django), fixed rather than "first 5 of sorted(glob(...))" so the
+# mix isn't accidentally all-astropy (astropy sorts before django); reproducible either way.
 SESSION_FILES = [
     "traces/astropy__astropy-12907.jsonl",
     "traces/astropy__astropy-14182.jsonl",
@@ -85,15 +89,15 @@ NOTES = [
     "generate_lookup (same chunking, same last-position-only logits, same "
     "make_trimmable_cache) so the comparison isolates drafting, not the prefill scheme "
     "(controller ruling, 2026-09-26).",
-    "Each row's prefill_s is measured once (from the item's greedy_fast baseline) and reused "
-    "as the prefill estimate for all 3 lookup settings on that item, rather than re-timing a "
-    "throwaway prefill per setting: generate_lookup's prefill is architecturally identical "
-    "(same chunking/last-position-logits/cache type), and its own make_trimmable_cache slack "
-    "differs by at most 16 tokens of retained cache buffer -- attention itself is still masked "
-    "to the model's sliding_window regardless of slack, so this is a negligible compute delta, "
-    "not a masked one. decode_s = (end-to-end wall time of the full generate_lookup call) - "
-    "prefill_s; on a very fast, very short generation this can occasionally go slightly negative "
-    "from timing noise, in which case decode_s is floored rather than reported as infinite tok/s.",
+    "prefill_s is each method's OWN prefill wall time: greedy_fast returns its own (from the "
+    "same _lookup_prefill call it decodes from), and generate_lookup returns its own via "
+    "stats['prefill_s']. decode_s = (that call's own end-to-end wall time) - (that same call's "
+    "own prefill_s); on a very fast, very short generation this can occasionally go slightly "
+    "negative from timing noise, in which case decode_s is floored rather than reported as "
+    "infinite tok/s. Earlier drafts of this script subtracted greedy_fast's prefill_s from "
+    "generate_lookup's total (a different cache slack, n_draft+1 vs greedy_fast's 64) -- fixed "
+    "per S4 review round 1, since that over-corrected generate_lookup's decode_s in its own "
+    "favour on exactly the long-prefix workload the 1.1x keep decision is gated on.",
     "identical (vs greedy_fast, not generate_greedy) < 1 is hypothesized to come from bf16 exact "
     "logit near-ties broken differently between greedy_fast's single-token decode steps and "
     "generate_lookup's batched-verify steps (same hypothesis as results/dflash.json); "
@@ -114,15 +118,20 @@ NOTES = [
 def _lookup_prefill(target, prompt, prefill_step=PREFILL_STEP, slack=64):
     """Chunked prefill identical to generate_lookup's own: last-position logits
     only, mx.eval'd per chunk so the compute graph never spans the whole
-    prompt. Copied here (not imported) per the brief: don't modify laguna_mlx."""
+    prompt. Copied here (not imported) per the brief: don't modify laguna_mlx
+    beyond generate_lookup's additive prefill_s stat. Returns (cache, logits,
+    prefill_s) -- prefill_s is this call's own wall time, timed the same way
+    as generate_lookup's stats["prefill_s"]."""
     prompt = [int(t) for t in prompt]  # accept numpy ints
     cache = make_trimmable_cache(target, slack=slack)
     logits = None
+    t0 = time.perf_counter()
     for a in range(0, len(prompt), prefill_step):
         h = target.model(mx.array([prompt[a : a + prefill_step]]), cache=cache)
         logits = target.lm_head(h[0, -1])
         mx.eval(logits)
-    return cache, logits
+    prefill_s = time.perf_counter() - t0
+    return cache, logits, prefill_s
 
 
 def _decode_greedy(target, cache, logits, max_tokens, eos=()):
@@ -139,9 +148,14 @@ def greedy_fast(target, prompt, max_tokens, eos=(), prefill_step=PREFILL_STEP):
     """generate_greedy, but prefills exactly like generate_lookup (chunked,
     last-position logits only, eval per chunk, make_trimmable_cache) instead
     of one all-position forward, then decodes one token at a time. Output
-    equals generate_greedy -- see test_greedy_fast_matches_generate_greedy."""
-    cache, logits = _lookup_prefill(target, prompt, prefill_step)
-    return _decode_greedy(target, cache, logits, max_tokens, eos)
+    equals generate_greedy -- see test_greedy_fast_matches_generate_greedy.
+    Returns (tokens, prefill_s): prefill_s is this call's own prefill wall
+    time (see _lookup_prefill), so a caller comparing against generate_lookup
+    subtracts each call's own prefill_s from its own total, never one call's
+    prefill from another's total (Task S4 review, round 1)."""
+    cache, logits, prefill_s = _lookup_prefill(target, prompt, prefill_step)
+    out = _decode_greedy(target, cache, logits, max_tokens, eos)
+    return out, prefill_s
 
 
 def session_prefix(ids, mask, max_tokens=PREFIX_TOKENS):
@@ -261,15 +275,15 @@ def _session_items():
 
 
 def _run_item(target, ids, max_tokens, eos):
+    """Time greedy_fast and each lookup setting on the same item, each against its own
+    prefill_s (see NOTES) -- not a shared or cross-call estimate."""
     t0 = time.perf_counter()
-    cache, logits = _lookup_prefill(target, ids)
-    prefill_s = time.perf_counter() - t0
-    t1 = time.perf_counter()
-    base_out = _decode_greedy(target, cache, logits, max_tokens, eos)
-    decode_s = time.perf_counter() - t1
-    base = {"tokens": len(base_out), "prefill_s": prefill_s, "decode_s": decode_s,
-            "decode_tok_s": len(base_out) / decode_s,
-            "e2e_tok_s": len(base_out) / (prefill_s + decode_s)}
+    base_out, base_prefill_s = greedy_fast(target, ids, max_tokens, eos)
+    base_total_s = time.perf_counter() - t0
+    base_decode_s = max(base_total_s - base_prefill_s, 1e-9)
+    base = {"tokens": len(base_out), "prefill_s": base_prefill_s, "decode_s": base_decode_s,
+            "total_s": base_total_s, "decode_tok_s": len(base_out) / base_decode_s,
+            "e2e_tok_s": len(base_out) / base_total_s}
 
     rows = []
     for s in SETTINGS:
@@ -277,14 +291,14 @@ def _run_item(target, ids, max_tokens, eos):
         out, stats = generate_lookup(target, ids, max_tokens, eos, g=s["g"], n_draft=s["n_draft"],
                                       adaptive=s["adaptive"], prefill_step=PREFILL_STEP)
         total_s = time.perf_counter() - t2
-        decode_only_s = max(total_s - prefill_s, 1e-9)  # see NOTES: prefill_s is shared/estimated
+        decode_s = max(total_s - stats["prefill_s"], 1e-9)
         identical = out == base_out
         rows.append({
-            **s, "tokens": len(out), "total_s": total_s, "decode_s": decode_only_s,
-            "decode_tok_s": len(out) / decode_only_s,
-            "e2e_tok_s": len(out) / (prefill_s + decode_only_s),
-            "speedup_decode": (len(out) / decode_only_s) / base["decode_tok_s"],
-            "speedup_e2e": (len(out) / (prefill_s + decode_only_s)) / base["e2e_tok_s"],
+            **s, "tokens": len(out), "total_s": total_s, "prefill_s": stats["prefill_s"],
+            "decode_s": decode_s, "decode_tok_s": len(out) / decode_s,
+            "e2e_tok_s": len(out) / total_s,
+            "speedup_decode": (len(out) / decode_s) / base["decode_tok_s"],
+            "speedup_e2e": (len(out) / total_s) / base["e2e_tok_s"],
             "mean_accepted": stats["mean_accepted"], "steps": stats["steps"],
             "drafted": stats["drafted"], "accepted": stats["accepted"],
             "steps_with_draft": stats["steps_with_draft"],
@@ -294,23 +308,43 @@ def _run_item(target, ids, max_tokens, eos):
     return base, rows
 
 
-def _run_workload(target, items, max_tokens, eos, swap, over, label):
-    rows = []
+def _existing_rows(result, label):
+    """{item_name: row} already completed for this (target, workload), from a result dict
+    possibly loaded from a previous, interrupted run."""
+    w = result.get(label)
+    return {r["name"]: r for r in w["rows"]} if w else {}
+
+
+def _run_workload(name, result, target, items, max_tokens, eos, swap, over, label):
+    """Runs `items` not already present in result[label] (resumed from disk), saving to
+    results/lookup.json (atomic) after every item so a crash mid-workload only costs the
+    items not yet finished, not the whole target."""
+    done = _existing_rows(result, label)
+    rows = list(done.values())
     for it in items:
+        if it["name"] in done:
+            continue
         base, setting_rows = _run_item(target, it["ids"], max_tokens, eos)
         rows.append({"name": it["name"], "prompt_tokens": len(it["ids"]),
                      "baseline": base, "settings": setting_rows})
+        result[label] = {"rows": rows, "aggregate": _aggregate(rows)}
+        _save_target(name, result)  # checkpoint this item immediately
         swap.append((f"{label}:{it['name']}", swap_gb()))
         if over(f"{label}:{it['name']}"):
             break
-    return {"rows": rows, "aggregate": _aggregate(rows)}
+    result[label] = {"rows": rows, "aggregate": _aggregate(rows)}
+    return result[label]
 
 
 def _run_target(name, args):
+    """Loads the model once, resumes any already-completed items for this target from
+    results/lookup.json (per-item checkpointing: see _run_workload), then runs the rest."""
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     swap = [("start", swap_gb())]
+    prior = _load_results().get(name) or {}
     result = {"target": name, "slots": args.slots if name == "streaming" else None,
-              "max_tokens": args.max_tokens, "swap_gb": swap, "stopped": None}
+              "max_tokens": args.max_tokens, "swap_gb": swap, "stopped": None,
+              **{k: prior[k] for k in ("prompts", "sessions") if k in prior}}
 
     def over(stage):
         if swap[-1][1] > args.max_swap_gb:
@@ -330,16 +364,16 @@ def _run_target(name, args):
         mx.clear_cache()
         return result
 
-    result["prompts"] = _run_workload(target, prompt_items, args.max_tokens, eos, swap, over, "prompts")
+    _run_workload(name, result, target, prompt_items, args.max_tokens, eos, swap, over, "prompts")
     result["peak_gpu_gb"] = mx.get_peak_memory() / 1e9
-    _save_target(name, result)  # persist the prompts workload before sessions can crash it away
+    _save_target(name, result)
     if result["stopped"]:
         del target
         mx.clear_cache()
         return result
 
     session_items = _session_items()
-    result["sessions"] = _run_workload(target, session_items, args.max_tokens, eos, swap, over, "sessions")
+    _run_workload(name, result, target, session_items, args.max_tokens, eos, swap, over, "sessions")
     result["peak_gpu_gb"] = mx.get_peak_memory() / 1e9
     del target
     mx.clear_cache()
