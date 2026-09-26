@@ -174,8 +174,10 @@ def generate_lookup(target, prompt, max_tokens, eos=(), g=4, n_draft=7, adaptive
     prompt = [int(t) for t in prompt]  # accept numpy ints
     cache = make_trimmable_cache(target, slack=n_draft + 1)
     for a in range(0, len(prompt), prefill_step):
-        logits = target(mx.array([prompt[a : a + prefill_step]]), cache=cache)[0]
-    token = int(mx.argmax(logits[-1]))
+        h = target.model(mx.array([prompt[a : a + prefill_step]]), cache=cache)
+        logits = target.lm_head(h[0, -1])  # last position only: no [chunk, vocab] logits
+        mx.eval(logits)  # materialize this chunk's KV so the graph doesn't span the whole prompt
+    token = int(mx.argmax(logits))
     index = NgramIndex(g)
     index.extend(prompt + [token])  # ids = prompt + emitted + pending token
     out, cap = [], n_draft
