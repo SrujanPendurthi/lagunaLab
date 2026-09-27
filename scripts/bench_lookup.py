@@ -18,8 +18,9 @@ in tests/test_bench_lookup.py for the CPU/tiny-model equivalence check.
 
 The headline number is DECODE tok/s, lookup vs greedy_fast; end-to-end
 (prefill+decode) tok/s is also reported. Settings are swept PER TARGET (see
-SETTINGS below): resident sweeps g=4/n=7 fixed, g=4/n=15 adaptive (S2's
-best), g=3/n=7 fixed; streaming is restricted to short drafts (block <= 4
+SETTINGS below): resident sweeps g=4/n=3 fixed, g=4/n=3 adaptive (S2's best
+per results/lookup_acceptance.json's measured-cost re-run), g=4/n=7 fixed as
+a comparison point; streaming is restricted to short drafts (block <= 4
 tokens) to stay below its verify-cost cliff (see NOTES / results/dflash_diag.json).
 
 python3 -m scripts.bench_lookup [--target resident|streaming|both]
@@ -67,23 +68,29 @@ PREFIX_TOKENS = 8192
 TOK_DIR = "models/Laguna-XS-2.1"
 RESIDENT_DIR = "models/Laguna-XS-2.1-mlx-4bit"
 PACK_DIR = "models/Laguna-XS-2.1-packed"
-# Settings are per target (single source of truth), not one shared list: resident sweeps
-# g=4/n=7 fixed, g=4/n=15 adaptive (S2's best offline setting), and g=3/n=7 fixed as a
-# sensitivity check (brief, controller additions 2026-09-26). streaming is restricted to
-# short drafts -- g=4/n=3 fixed, g=4/n=3 adaptive, g=4/n=2 fixed -- all with verify-block
-# length (1 + n_draft) <= 4 tokens, staying below the streaming verify-cost cliff measured
-# in results/dflash_diag.json (S1 follow-up, 2026-09-26): streaming's median verify_ms was
+# Settings are per target (single source of truth), not one shared list. resident sweeps
+# g=4/n=3 fixed, g=4/n=3 adaptive, g=4/n=7 fixed (brief, controller additions 2026-09-26;
+# updated 2026-09-26 follow-up): S2's re-run with S1's MEASURED verify costs
+# (results/lookup_acceptance.json, commit 22f84f1, build_measured_cost_fn) predicts g=4/n=3
+# fixed as resident's best expected speedup (1.483x), not g=4/n=7 (1.297x) -- the earlier
+# provisional linear cost model had favored longer drafts. n=7 is kept as the comparison
+# point (n=15 adaptive and g=3/n=7 are dropped: g=4/n=3 adaptive is the stronger second
+# setting at 1.478x, per the same measured-cost sweep). streaming is restricted to short
+# drafts -- g=4/n=3 fixed, g=4/n=3 adaptive, g=4/n=2 fixed -- all with verify-block length
+# (1 + n_draft) <= 4 tokens, staying below the streaming verify-cost cliff measured in
+# results/dflash_diag.json (S1 follow-up, 2026-09-26): streaming's median verify_ms was
 # 37.8@block=1, 61.9@block=4, then 212.0@block=6 and 574.1@block=16 -- a cliff, not a curve,
 # because a block of >4 newly-drafted tokens routes up to 8 experts/token through a 32-slot
 # expert cache per layer, and once that exceeds 32 slots StreamingSwitchGLU needs multiple
 # masked passes (laguna_mlx/streaming.py's "a prefill chunk needing > slots experts runs
 # several masked passes" note) instead of one. Benchmarking streaming with n_draft=7/15
-# would only measure that cliff, not prompt-lookup's drafting benefit.
+# would only measure that cliff, not prompt-lookup's drafting benefit -- and the same
+# measured-cost sweep shows it: streaming g=4/n=7 fixed is 0.692x (slower than no drafting).
 SETTINGS = {
     "resident": [
+        {"g": 4, "n_draft": 3, "adaptive": False},
+        {"g": 4, "n_draft": 3, "adaptive": True},
         {"g": 4, "n_draft": 7, "adaptive": False},
-        {"g": 4, "n_draft": 15, "adaptive": True},
-        {"g": 3, "n_draft": 7, "adaptive": False},
     ],
     "streaming": [
         {"g": 4, "n_draft": 3, "adaptive": False},
@@ -125,15 +132,21 @@ NOTES = [
     "ending right before the start of the *last* assistant turn (replay.session tokenize's "
     "assistant mask) -- the context an agent had just before deciding what to write next, "
     "which is where prompt-lookup drafting is expected to pay off most.",
-    "Settings differ per target (see the top-level `settings` key): streaming is restricted "
-    "to short drafts (verify-block length <= 4 tokens: g=4/n=3 fixed, g=4/n=3 adaptive, "
-    "g=4/n=2 fixed), dropping the n=7/n=15 settings resident uses, because "
-    "results/dflash_diag.json measured a streaming verify-cost cliff, not a curve: median "
-    "verify_ms was 37.8@block=1, 61.9@block=4, then 212.0@block=6 and 574.1@block=16. A "
-    "block of drafted tokens > 4 can route more experts/token than the 32-slot expert cache "
-    "holds at once, forcing StreamingSwitchGLU into multiple masked passes per layer; "
-    "benchmarking streaming with n_draft=7/15 would measure that cliff, not prompt-lookup's "
-    "drafting benefit (S1 follow-up, 2026-09-26).",
+    "Settings differ per target (see the top-level `settings` key). resident sweeps g=4/n=3 "
+    "fixed, g=4/n=3 adaptive, g=4/n=7 fixed: results/lookup_acceptance.json (commit 22f84f1) "
+    "re-ran S2's offline simulation against S1's MEASURED verify costs (not the earlier "
+    "provisional linear model) and predicts g=4/n=3 fixed as resident's best expected "
+    "speedup (1.483x) and g=4/n=3 adaptive close behind (1.478x) -- both ahead of g=4/n=7 "
+    "fixed (1.297x, kept here only as the comparison point against the earlier settings). "
+    "streaming is restricted to short drafts (verify-block length <= 4 tokens: g=4/n=3 "
+    "fixed, g=4/n=3 adaptive, g=4/n=2 fixed), dropping the n=7/n=15 settings resident uses, "
+    "because results/dflash_diag.json measured a streaming verify-cost cliff, not a curve: "
+    "median verify_ms was 37.8@block=1, 61.9@block=4, then 212.0@block=6 and 574.1@block=16. "
+    "A block of drafted tokens > 4 can route more experts/token than the 32-slot expert "
+    "cache holds at once, forcing StreamingSwitchGLU into multiple masked passes per layer; "
+    "the same measured-cost sweep in results/lookup_acceptance.json confirms it directly -- "
+    "streaming g=4/n=7 fixed predicts 0.692x (slower than no drafting at all), vs 1.697x for "
+    "g=4/n=3 fixed (S1 follow-up, 2026-09-26).",
     "Timings may include noise from concurrent human activity on the machine.",
     "Single run per setting; no repeats.",
 ]

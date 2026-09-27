@@ -120,12 +120,16 @@ def test_target_complete_false_when_settings_dont_match_current(tmp_path, monkey
 
 def test_settings_is_per_target_and_streaming_stays_below_the_cliff():
     assert set(bl.SETTINGS) == {"resident", "streaming"}
+    # resident: g=4/n=3 fixed + adaptive (best per results/lookup_acceptance.json's measured-cost
+    # re-run, 1.483x/1.478x), g=4/n=7 fixed kept as the comparison point (1.297x).
     resident_n = {s["n_draft"] for s in bl.SETTINGS["resident"]}
-    streaming_n = {s["n_draft"] for s in bl.SETTINGS["streaming"]}
-    assert resident_n == {7, 15}  # unchanged: g=4/n=7 fixed, g=4/n=15 adaptive, g=3/n=7 fixed
+    assert resident_n == {3, 7}
+    assert {"g": 4, "n_draft": 3, "adaptive": False} in bl.SETTINGS["resident"]
+    assert {"g": 4, "n_draft": 7, "adaptive": False} in bl.SETTINGS["resident"]
     # streaming: every setting's verify-block length (1 + n_draft) stays <= 4 tokens, i.e.
     # n_draft <= 3, below the measured verify-cost cliff (results/dflash_diag.json: 61.9ms at
     # block=4 vs 212.0ms at block=6).
+    streaming_n = {s["n_draft"] for s in bl.SETTINGS["streaming"]}
     assert streaming_n == {3, 2}
     assert all(s["n_draft"] <= 3 for s in bl.SETTINGS["streaming"])
     assert bl.SETTINGS["resident"] != bl.SETTINGS["streaming"]
