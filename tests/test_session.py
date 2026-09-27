@@ -65,6 +65,22 @@ def test_truncation_is_flagged(tok):
     assert truncated and len(ids) == 10 and len(mask) == 10
 
 
+def test_tokenize_matches_mlx_lm_wrapper_tokenizer(tok):
+    # mlx_lm.load()/load_tokenizer() returns a TokenizerWrapper whose
+    # apply_chat_template forces return_dict=False, which raises
+    # ValueError with return_assistant_tokens_mask=True. tokenize() must
+    # unwrap it and produce output identical to the plain HF tokenizer.
+    from pathlib import Path
+    from mlx_lm.utils import load_tokenizer
+    wrapper = load_tokenizer(Path("models/Laguna-XS-2.1-mlx-4bit"))
+    msgs = [normalize(m) for m in MESSAGES]
+    w_ids, w_mask, w_trunc = tokenize(wrapper, msgs, None)
+    ids, mask, trunc = tokenize(tok, msgs, None)
+    assert w_trunc == trunc == False
+    assert w_ids.tolist() == ids.tolist()
+    assert w_mask.tolist() == mask.tolist()
+
+
 def test_tokenize_with_null_arguments(tok):
     # Tool call with "null" arguments (parsed JSON non-dict) should tokenize without error
     msgs = [

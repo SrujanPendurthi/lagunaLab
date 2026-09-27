@@ -42,6 +42,14 @@ def load_session(path):
 
 
 def tokenize(tokenizer, messages, tools, max_tokens=None):
+    # mlx_lm.load() returns a TokenizerWrapper whose apply_chat_template
+    # hardcodes return_dict=False before delegating to its wrapped HF
+    # tokenizer, which breaks return_assistant_tokens_mask=True. Unwrap
+    # only that wrapper: a plain HF (fast) tokenizer also has a `_tokenizer`
+    # attribute, but it's the low-level Rust tokenizer with no
+    # apply_chat_template, so it must be left alone.
+    if type(tokenizer).__name__ == "TokenizerWrapper":
+        tokenizer = tokenizer._tokenizer
     enc = tokenizer.apply_chat_template(
         messages, tools=tools, tokenize=True, return_dict=True,
         return_assistant_tokens_mask=True, enable_thinking=True,
