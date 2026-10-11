@@ -1,0 +1,26 @@
+{
+ "criterion": "reap",
+ "ratio": 0.5,
+ "base": {
+  "decode_tok_s": 34.212542463580384,
+  "peak_gpu_gb": 18.89846597,
+  "disk_gb": 18.388316
+ },
+ "resident": {
+  "decode_tok_s": 38.651465140562806,
+  "peak_gpu_gb": 10.103299648,
+  "disk_gb": 9.7988,
+  "kl_mean": 0.08089492365456465,
+  "top1": 0.9450899977215766,
+  "action_match": 0.3
+ },
+ "streaming_slots32": {
+  "decode_tok_s": 12.797487799849542,
+  "peak_gpu_gb": 3.9705306,
+  "hits": 79487,
+  "misses": 49048,
+  "hit_rate": 0.6184074376628934,
+  "bytes_read": 86789062656,
+  "disk_gb": 9.751324
+ }
+}

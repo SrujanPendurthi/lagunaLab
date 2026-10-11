@@ -1,0 +1,14 @@
+{
+ "sessions": [
+  "astropy__astropy-12907",
+  "astropy__astropy-14182",
+  "astropy__astropy-14365",
+  "astropy__astropy-14995",
+  "astropy__astropy-6938",
+  "astropy__astropy-7746"
+ ],
+ "tokens": 98304,
+ "cap": 16384,
+ "tok_per_s": 233.32889559671113,
+ "note": "recorder syncs per layer; slower than plain prefill"
+}
