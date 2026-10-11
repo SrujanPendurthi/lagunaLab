@@ -173,3 +173,11 @@ def test_prune_checkpoint_rejects_non_uniform(tmp_path):
     d, _ = quantized_model_dir(tmp_path)
     with pytest.raises(ValueError):
         prune_checkpoint(d, {1: np.arange(5), 2: np.arange(6), 3: np.arange(5)}, tmp_path / "x")
+
+
+def test_prune_checkpoint_rejects_partial_layer_coverage(tmp_path):
+    d, _ = quantized_model_dir(tmp_path)
+    out = tmp_path / "x"
+    with pytest.raises(ValueError, match="missing"):
+        prune_checkpoint(d, {1: np.arange(5), 2: np.arange(5)}, out)
+    assert not out.exists()

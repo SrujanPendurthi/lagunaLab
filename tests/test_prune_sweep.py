@@ -143,6 +143,11 @@ def test_baseline_sanity_check_saves_row_then_exits(model, tok, wired, monkeypat
     assert data["rows"][0]["criterion"] == "none"
     assert data["rows"][0]["heldout"]["kl_mean"] == 1.0
 
+    # resuming must re-run the guard on the saved bad baseline, not skip past it
+    with pytest.raises(SystemExit, match="baseline sanity check failed"):
+        ps.sweep(model)
+    assert len(json.loads(ps.OUT.read_text())["rows"]) == 1
+
 
 def test_stale_stamp_refuses_resume(model, tok, wired):
     cap = 512

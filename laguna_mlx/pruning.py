@@ -195,12 +195,19 @@ def prune_checkpoint(model_dir, keep, out_dir):
         raise ValueError("prune_checkpoint supports uniform keep-sets only")
     out_dir.mkdir(parents=True)
     idx = {i: mx.array(np.asarray(v)) for i, v in keep.items()}
+    seen = set()
     for f in sorted(glob.glob(str(model_dir / "*.safetensors"))):
         out = {}
         for key, a in mx.load(f).items():
             m = _EXPERT_KEY.match(key)
+            if m:
+                seen.add(int(m.group(1)))
             out[key] = a[idx[int(m.group(1))]] if m and int(m.group(1)) in idx else a
         mx.save_safetensors(str(out_dir / Path(f).name), out, metadata={"format": "mlx"})
+    if seen != set(keep):
+        shutil.rmtree(out_dir)
+        raise ValueError(f"keep must cover exactly the MoE layers: missing {sorted(seen - set(keep))}, "
+                         f"unknown {sorted(set(keep) - seen)}")
     config = json.loads((model_dir / "config.json").read_text())
     config["num_experts"] = counts.pop()
     (out_dir / "config.json").write_text(json.dumps(config, indent=1))

@@ -48,9 +48,11 @@ def main():
     a = p.parse_args()
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     pct = int(round(a.ratio * 100))
-    out_dir = Path(f"models/Laguna-XS-2.1-pruned-{pct}")
-    pack_dir = Path(f"models/Laguna-XS-2.1-pruned-{pct}-packed")
-    res = {"criterion": a.criterion, "ratio": a.ratio}
+    out_dir = Path(f"models/Laguna-XS-2.1-pruned-{a.criterion}-{pct}")
+    pack_dir = Path(f"models/Laguna-XS-2.1-pruned-{a.criterion}-{pct}-packed")
+    res = {"criterion": a.criterion, "ratio": a.ratio, "cap": a.cap, "actions": a.actions,
+           "note": "operating point was picked on the django held-out curve in results/pruning.json, "
+                   "so kl/top1 here are post-selection, not an untouched estimate"}
 
     # 1. references with greedy actions from the UNPRUNED resident model
     AREFS.mkdir(parents=True, exist_ok=True)
@@ -79,7 +81,9 @@ def main():
     w = [r["assistant_tokens"] for r in rows]
     res["resident"]["kl_mean"] = sum(r["kl_top64_mean"] * x for r, x in zip(rows, w)) / sum(w)
     res["resident"]["top1"] = sum(r["top1_agree"] * x for r, x in zip(rows, w)) / sum(w)
-    res["resident"]["action_match"] = sum(score_actions(model, tok, r) for r in sorted(AREFS.glob("*.npz"))) / len(rows)
+    am = [m for m in (score_actions(model, tok, r) for r in sorted(AREFS.glob("*.npz"))) if m == m]
+    res["resident"]["action_match"] = sum(am) / len(am) if am else None
+    res["resident"]["action_match_refs"] = len(am)
     del model
     mx.clear_cache()
 

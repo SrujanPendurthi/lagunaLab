@@ -72,6 +72,7 @@ def refs(model, tok, cap):
 def _aggregate(rows):
     w = np.array([r["assistant_tokens"] for r in rows], float)
     return {"kl_mean": float(np.average([r["kl_top64_mean"] for r in rows], weights=w)),
+            # max over sessions of each session's p99 (not a pooled p99 over all tokens)
             "kl_p99_max": float(max(r["kl_top64_p99"] for r in rows)),
             "top1": float(np.average([r["top1_agree"] for r in rows], weights=w)),
             "assistant_tokens": int(w.sum())}
@@ -84,6 +85,14 @@ def _stamp(ref_paths):
                         key=lambda d: d["name"])
     return {"stats_sha256": hashlib.sha256(STATS_PATH.read_bytes()).hexdigest(),
             "refs": refs_info, "cap": meta.get("cap")}
+
+
+def _check_baseline(row):
+    if row["heldout"]["kl_mean"] >= 1e-5 or row["heldout"]["top1"] != 1.0:
+        raise SystemExit(
+            f"baseline sanity check failed: heldout kl_mean={row['heldout']['kl_mean']!r}, "
+            f"top1={row['heldout']['top1']!r} (want < 1e-5 and == 1.0) -- the evaluation path "
+            f"is nondeterministic. The row was saved to {OUT}; investigate before sweeping further.")
 
 
 def sweep(model):
@@ -107,6 +116,9 @@ def sweep(model):
                 f"`mv {OUT} {OUT}.bak`, and rerun the sweep from scratch, or restore the stats/refs "
                 "it was built from.")
         done = prev["rows"]
+        for r in done:
+            if r["criterion"] == "none":
+                _check_baseline(r)
     have = {(r["criterion"], r["allocation"], r["ratio"]) for r in done}
     for crit, alloc, ratio in [("none", "uniform", 0.0)] + GRID:
         if (crit, alloc, ratio) in have:
@@ -130,11 +142,8 @@ def sweep(model):
         tmp.write_text(json.dumps({"model": MODEL, "stamp": stamp, "rows": done}, indent=1))
         tmp.replace(OUT)  # atomic: an interrupt never leaves a half-written file
         print(crit, alloc, ratio, row["heldout"], f"{row['seconds']:.0f}s", flush=True)
-        if crit == "none" and (row["heldout"]["kl_mean"] >= 1e-5 or row["heldout"]["top1"] != 1.0):
-            raise SystemExit(
-                f"baseline sanity check failed: heldout kl_mean={row['heldout']['kl_mean']!r}, "
-                f"top1={row['heldout']['top1']!r} (want < 1e-5 and == 1.0) -- the evaluation path "
-                f"is nondeterministic. The row was saved to {OUT}; investigate before sweeping further.")
+        if crit == "none":
+            _check_baseline(row)
 
 
 def main():
