@@ -319,9 +319,13 @@ def test_sweep_rows_summary_and_resume(tok, traces, tmp_path, monkeypatch):
 
 
 def test_truncated_reference_is_refused(tok, traces, tmp_path):
+    import numpy as np
+
     m = mlx_only_model(head_dim=64)
+    full = bench_kv.build_refs(m, tok, traces, tmp_path / "full", cap=4096)
+    n = len(np.load(full[-1])["ids"])  # longest session
     with pytest.raises(ValueError, match="truncated"):
-        bench_kv.build_refs(m, tok, traces, tmp_path / "refs", cap=8)
+        bench_kv.build_refs(m, tok, traces, tmp_path / "refs", cap=n - 2)
 ```
 
 - [ ] **Step 2: Run it to see it fail**
