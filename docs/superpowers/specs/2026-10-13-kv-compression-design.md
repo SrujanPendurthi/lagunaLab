@@ -50,10 +50,10 @@ Not yet measured, and assumed below: the peak during prefill of a long session
 6. **Gate:** the least compression that keeps the longest session under the
    budget with top-1 ≥ 0.98 and KL mean ≤ 0.02 nats against the plain cache.
 7. **Speed is reported, not gated:** prefill and decode tok/s per setting.
-   `QuantizedKVCache` dequantizes the whole cache on every call, so both the
-   transient peak and decode speed may be worse than the stored size suggests.
-   If that removes the memory win, dequantizing one layer at a time (or caching
-   the dequantized prefix) becomes its own task, with its own test.
+   mlx-lm attends over the quantized cache directly (`mx.quantized_matmul`), so
+   nothing is dequantized in bulk, but that kernel may be slower than the plain
+   attention path. If speed makes the setting unusable, that becomes its own
+   task, with its own test.
 
 ## Components
 
