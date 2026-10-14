@@ -1,0 +1,280 @@
+# Results
+
+All findings, in the order they were produced. Every number comes from the
+`results/` file named next to it; nothing here is extrapolated unless it says
+so. Hardware for everything: 24 GB M4 MacBook Air, MLX 0.32.0, mlx-lm 0.31.3.
+
+**Comparing speeds.** Decode tok/s is only comparable *within one results
+file*. Different scripts use different prompts, lengths, decode loops, and
+machine states. For example, the full resident model measured 18.6 tok/s in
+`streaming.json`, 40.3 in `dflash.json` and 34.2 in `prune_point.json`.
+
+---
+
+## The session corpus
+
+Source: `results/lookup_acceptance.json` → `corpus`.
+
+`pool` (Poolside's agent) ran SWE-bench Lite tasks against this repo's
+streaming MLX model, and every request was captured.
+
+| | Sessions | Tokens | Assistant tokens |
+|---|---|---|---|
+| astropy (calibration) | 6 | 397,400 | 145,768 |
+| django (held-out evaluation) | 5 | 366,290 | 155,975 |
+| **Total** | **11** | **763,690** | **301,743** |
+
+Session lengths range from 42,771 to 82,671 tokens. The longest,
+`django__django-11039` at 82,671 tokens, is the Part 3 target.
+
+---
+
+## Part 1: harness, parity, baseline
+
+### Parity against llama.cpp
+
+Source: `results/parity.json`.
+
+The plan: teacher-force our MLX model on llama.cpp's greedy continuations of 21
+prompts, then require top-1 agreement ≥ 0.95 and in-top-5 ≥ 0.99.
+
+What happened: llama.cpp build 10964 has a Laguna bug on short prompts. For
+prompts of roughly 36–512 tokens it returns a constant token with null
+logprobs. As a result, **20 of 21 reference rows are degenerate**, and the gate
+was evaluated on the one valid row:
+
+| Row | Prompt tokens | Top-1 | In top-5 |
+|---|---|---|---|
+| `long_doc` | 9,782 | 0.969 | 1.0 |
+
+This is weak evidence on its own. Two other checks carry most of the
+confidence in the port:
+
+- the tiny-config tests against Poolside's own PyTorch `modeling_laguna.py`;
+- replay self-checks scoring KL = 0 exactly.
+
+### Baseline, and streaming across slot budgets
+
+Source: `results/streaming.json` (Task 18; full, unpruned 4-bit model).
+
+| Target | Decode tok/s | Prefill tok/s | Peak GPU GB | Expert hit rate |
+|---|---|---|---|---|
+| Resident | 18.6 | 40.6 | 19.81 | n/a |
+| Streaming, 16 slots | 10.7 | 52.2 | 3.70 | 0.314 |
+| Streaming, 32 slots | 10.1 | 71.0 | 4.66 | 0.405 |
+| Streaming, 64 slots | 9.9 | 90.1 | 7.06 | 0.527 |
+| Streaming, 128 slots | 9.7 | 115.4 | 12.80 | 0.735 |
+
+At 16k context, streaming decode drops to 4.4 tok/s at both 16 and 32 slots.
+
+- **Decode speed is flat across slot budgets** even though the hit rate more
+  than doubles. So SSD reads are not the decode bottleneck. The suspect is the
+  per-layer GPU→CPU sync of router indices (39 per token), which Task S5
+  profiles.
+- **Prefill does scale with slots**: more experts fit per chunk, so there are
+  fewer masked passes.
+- `identical_frac` (greedy outputs equal to resident) is 0 at 16–64 slots and
+  0.67 at 128 slots. The per-forward logits match to 1e-5. The recorded
+  hypothesis is that bf16 exact ties break differently because the summation
+  order across experts differs. This hasn't been verified directly.
+
+### DFlash speculative decoding: negative result
+
+Sources: `results/dflash.json`, `results/dflash_diag.json`.
+
+This is the first MLX port of Poolside's DFlash draft model.
+
+| Target | Greedy baseline | DFlash range | Mean accepted tokens per step |
+|---|---|---|---|
+| Resident | 40.3 tok/s | 0.36×–0.86× (9 settings: draft bits 16/8/4 × n_draft 3/7/15) | 1.82–2.51 |
+| Streaming, 32 slots | 11.4 tok/s | 1.06× (n=3), 0.65× (n=7), 0.32× (n=15) | 1.84–2.75 |
+
+Is the port wrong? The S1 diagnostic says no:
+
+- In every prompt and on both targets, plain greedy and greedy on the
+  trimmable cache produce identical outputs.
+- Wherever DFlash diverges, the top-2 logit gap is 0–4 bf16 ulps, i.e. near-ties.
+
+So the low speedup comes from the hardware's verify cost, not a bug.
+
+Median verify time per block (`dflash_diag.json`):
+
+| Block length | 1 | 2 | 3 | 4 | 6 | 8 | 12 | 16 |
+|---|---|---|---|---|---|---|---|---|
+| Resident (ms) | 25.3 | 32.7 | 40.6 | 49.8 | 83.3 | 96.4 | 118.8 | 132.0 |
+| Streaming (ms) | 37.8 | 45.0 | 52.9 | 61.9 | 212.0 | 306.0 | 451.5 | 574.1 |
+
+- **The MoE verify cost** grows with block length because each extra token
+  routes to more experts.
+- **Streaming hits a cliff** above 4 tokens: the block needs more experts than
+  the 32 slots hold, which forces multiple masked passes.
+- **Acceptance is low**: 1.8–2.5 per step, against the 3.5–4.6 Poolside reports
+  on GPU. Neither problem alone would make DFlash pay off here.
+
+### Prompt-lookup speculative decoding: marginal
+
+Sources: `results/lookup_acceptance.json` (S2, offline, CPU), `results/lookup.json` (S4, real weights).
+
+S2 simulated lookup drafting over all 301,743 assistant tokens, priced with
+S1's measured verify costs. Best predicted speedup: **g=4, n=3, fixed** at
+2.35 tokens per forward, giving 1.48× resident and 1.70× streaming. Longer
+drafts produce more tokens per forward (3.91 at g=2, n=15) but are predicted
+slower, because verify is expensive.
+
+S4 measured on real weights: 256 generated tokens after real 8k-token session
+prefixes (5 sessions).
+
+| Target | Setting | Decode speedup | End-to-end speedup | Mean accepted |
+|---|---|---|---|---|
+| Resident | g=4, n=3, fixed | 1.22× | 1.00× | 1.23 |
+| Resident | g=4, n=3, adaptive | 1.22× | 0.98× | 0.95 |
+| Resident | g=4, n=7, fixed | 0.94× | 0.97× | 1.87 |
+| Streaming | g=4, n=3, fixed | 1.14× | 1.02× | 1.46 |
+| Streaming | g=4, n=3, adaptive | 1.10× | 1.02× | 1.13 |
+| Streaming | g=4, n=2, fixed | 1.18× | 1.03× | 1.01 |
+
+On the 10 short prompts, every setting is between 1.01× and 1.06×.
+
+The decode-only speedup clears the plan's 1.1× keep threshold, but end-to-end
+time is unchanged, presumably because the 8k-token prefill dominates a
+256-token generation. The real-machine gain is well below S2's prediction. The
+repo records the numbers but no keep/drop decision.
+
+---
+
+## Part 2: expert pruning
+
+Source: `results/pruning.json` (sweep), `results/prune_point.json` (operating
+point), `results/action_diag.json` (action match).
+
+- **Setup:** calibrate on 6 astropy sessions; evaluate on 5 django sessions.
+  Each session is capped at 16,384 tokens for the sweep.
+- **Reference:** the unpruned 4-bit model (its self-check row scores KL 0,
+  top-1 1.0).
+- **Metrics:** held-out top-1 agreement and KL mean, in nats.
+
+### Quality vs. fraction of experts pruned (uniform allocation)
+
+| Pruned | REAP | Gate mass | Frequency | Random |
+|---|---|---|---|---|
+| 12.5% | **0.985** / 0.005 | 0.978 / 0.014 | 0.977 / 0.017 | 0.950 / 0.095 |
+| 25% | **0.967** / 0.025 | 0.968 / 0.036 | 0.964 / 0.041 | 0.924 / 0.176 |
+| 37.5% | **0.952** / 0.052 | 0.948 / 0.076 | 0.946 / 0.086 | 0.883 / 0.331 |
+| 50% | **0.945** / 0.081 | 0.930 / 0.118 | 0.917 / 0.154 | 0.842 / 0.490 |
+| 62.5% | **0.909** / 0.187 | 0.890 / 0.265 | 0.881 / 0.343 | 0.782 / 0.697 |
+
+Each cell is top-1 / KL mean.
+
+- **REAP has the lowest KL at every ratio** and the best or tied top-1 (gate mass edges it on top-1 at
+  25%, 0.968 vs 0.967). The criterion matters a lot: random pruning of 12.5%
+  hurts more than REAP pruning of 37.5%.
+- **Global allocation is worse than uniform.** REAP global scores 0.952 / 0.061
+  at 25% and 0.928 / 0.125 at 50%. The per-layer flexibility doesn't help, so
+  uniform is also the only allocation that can be materialized as a checkpoint.
+- **The calibration–held-out gap is real but modest.** REAP at 50% scores KL
+  0.047 on calibration sessions and 0.081 on held-out ones.
+
+### Operating point: REAP, uniform, 50%
+
+The spec's default rule picks the largest uniform ratio with held-out top-1 ≥
+0.90 and KL ≤ 0.10. That is REAP 50%; 62.5% fails on KL at 0.187. The human
+confirmed it.
+
+Materialized checkpoint (`prune_point.json`, short prompts):
+
+| | Full 4-bit | Pruned 50% |
+|---|---|---|
+| Disk | 18.39 GB | 9.80 GB |
+| Resident peak GPU | 18.90 GB | 10.10 GB |
+| Resident decode | 34.2 tok/s | 38.7 tok/s |
+| Held-out top-1 / KL | (reference) | 0.945 / 0.081 |
+| Streaming, 32 slots: peak / decode / hit rate | | 3.97 GB / 12.8 tok/s / 0.618 |
+
+Why pruned decode is faster was not profiled; smaller expert tensors per layer is the likely reason.
+Streaming's hit rate rises because 32 slots now cover 25% of each layer's
+experts instead of 12.5%.
+
+### Action match: is the pruned model still a usable agent?
+
+Greedy action match was 0.3 at the operating point, low enough to question the
+base. `scripts/diag_actions.py` separated metric harshness from real damage
+(`action_diag.json`, 20 tool calls):
+
+| | Exact match | Same tool |
+|---|---|---|
+| Full model vs. its own references (noise floor) | 20/20 | 20/20 |
+| Pruned 50% | 6/20 | 18/20 |
+
+The noise floor is perfect, so the 0.3 is real divergence, not metric noise.
+
+A manual reading of the 14 mismatches (a judgment, not stored in `results/`)
+found:
+
+- 2 hard failures: a degenerate repetition loop, and a corrupted file path;
+- 3 that differ only in a line-range argument;
+- 9 plausible alternative commands.
+
+The human accepted pruned-50 as the base for Part 3 on that basis. n = 20 is
+small; a 100-action sample would tighten it (about 1 hour of GPU time, not run).
+
+---
+
+## Part 3: KV cache compression
+
+Source: `results/kv.json`. Spec: `docs/superpowers/specs/2026-10-13-kv-compression-design.md`.
+
+The goal was to run the longest session, 82,671 tokens, on the pruned model
+within **12 GB peak GPU**, assumed as 75% of a 16 GB Mac. The quality gate,
+against the pruned model with a plain cache, was top-1 ≥ 0.98 and KL mean ≤ 0.02.
+
+Method: quantize K/V on the 10 full-attention layers to 8 or 4 bits. All 5
+django sessions were run at full length, and peak is the maximum over prefill
+and decode.
+
+| Setting | Peak GB | KV GB | Top-1 | KL mean | KL p99 max | Prefill tok/s | Decode tok/s @82k | Gate |
+|---|---|---|---|---|---|---|---|---|
+| Resident, plain | 14.60 | 3.39 | 1.0 | 0 | 0 | 95.8 | 7.42 | fail: budget |
+| Resident, 8-bit | 13.16 | 1.80 | 0.9963 | 0.0020 | 0.050 | 109.5 | 4.10 | fail: budget |
+| Resident, 4-bit | 12.29 | 0.95 | 0.9944 | 0.0038 | 0.120 | 114.5 | 4.99 | fail: budget (+0.29 GB) |
+| **Streaming, plain** | **8.04** | 3.39 | 1.0 | 0 | 0 | 69.6 | 4.69 | **pass** |
+
+In this table, resident prefill is the mean over the 5 sessions. Streaming
+prefill is from the longest session only. On the longest session alone,
+resident prefill was 92.6 (plain), 104.0 (8-bit) and 102.4 (4-bit) tok/s.
+
+- **Quality holds at both bit widths.** Every row has top-1 ≥ 0.988 and KL
+  mean ≤ 0.015. The budget is what fails.
+- **KV compression alone can't reach 12 GB resident.** Peak minus KV is
+  11.2–11.4 GB in every resident setting: the 10.1 GB short-prompt footprint
+  plus ~1.1–1.3 GB of long-prefill working set. 4-bit already shrinks KV to 0.95 GB.
+- **Streaming needs no compression.** At 8.04 GB it is about 4 GB under budget,
+  and identical to resident.
+- **Quantized KV decodes slower** at 82k (4.1 / 5.0 vs. 7.4 tok/s), because
+  `DequantKVCache` re-dequantizes each layer per token. Prefill is faster with
+  quantized KV; why was not investigated.
+
+**Decision (human, 2026-10-14):** pruned streaming with the plain cache is the
+16 GB answer. KV quantization stays in the codebase but is not the operating
+point.
+
+**Incident during this part:** mlx-lm's quantized attention path materialized
+full score matrices (about 16 GB per layer at 82k). The first 8-bit run hung
+the machine into a watchdog reboot. `DequantKVCache` replaced that path, and
+`bench_kv` now aborts if any row peaks above 16 GB. See runbook.md.
+
+---
+
+## Open items
+
+- **Task S5: streaming decode profile.** `scripts/profile_stream.py` is written
+  and tested; the real run writes `results/stream_profile.json`. It decides the
+  next speed fix: overlapping the router sync vs. vectorizing slot bookkeeping.
+- **Task 11: mlx-lm upstream PR** adding Laguna. Not filed; it is
+  outward-facing, so it needs a human go-ahead.
+- **Prompt lookup:** keep/drop decision not recorded (see above).
+- **Action match** on a larger sample (100 actions).
+- **Deferred minors** from the Part 3 review:
+  - `refs/kv` references aren't tied to a model path;
+  - `decode_peak_gpu_gb` actually covers prefill plus decode;
+  - `DequantKVCache.state` has no setter, so prompt-cache save/load would fail
+    (unused today).
