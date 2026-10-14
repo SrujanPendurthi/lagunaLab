@@ -18,7 +18,7 @@
 - [x] P3-3 `scripts/bench_kv.py`, tiny dry-run test
 - [x] P3-4 Real-model run, writing `results/kv.json`
 - [x] **Human decision:** accept the setting the gate picks, or change the budget/thresholds
-- [ ] Final review for Part 3 (whole-diff reviewer)
+- [x] Final review for Part 3 (whole-diff reviewer)
 
 ## Global Constraints
 
