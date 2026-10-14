@@ -72,3 +72,6 @@ def test_sweep_stops_before_longer_sessions_when_peak_too_high(tok, traces, tmp_
     with pytest.raises(SystemExit, match="peak"):
         bench_kv.sweep(m, "resident", (8,), refs, out, decode_n=4)
     assert list(json.loads(out.read_text())["rows"]) == ["resident/8/short"]  # recorded, then stopped
+    with pytest.raises(SystemExit, match="peak"):  # a resume must not skip past the recorded blow-up
+        bench_kv.sweep(m, "resident", (8,), refs, out, decode_n=4)
+    assert list(json.loads(out.read_text())["rows"]) == ["resident/8/short"]

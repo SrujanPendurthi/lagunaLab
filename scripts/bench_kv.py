@@ -94,17 +94,18 @@ def sweep(model, target, settings, refs, out=OUT, decode_n=64):
         mk = model.make_cache if bits is None else (lambda b=bits: make_quantized_cache(model, b))
         for r in refs:
             key = f"{target}/{bits or 'plain'}/{r.stem}"
-            if key in res["rows"]:
-                continue
-            row = score(model, r, make_cache=mk)
-            if r == refs[-1]:
-                row.update(decode_at_ctx(model, np.load(r)["ids"], mk, n=decode_n))
-            res["rows"][key] = row
-            res["summary"] = summarize(res)
-            tmp = out.with_suffix(".tmp")
-            tmp.write_text(json.dumps(res, indent=1))
-            tmp.replace(out)  # atomic: an interrupt never leaves a half-written file
-            print(key, {k: round(v, 4) if isinstance(v, float) else v for k, v in row.items()}, flush=True)
+            row = res["rows"].get(key)
+            if row is None:
+                row = score(model, r, make_cache=mk)
+                if r == refs[-1]:
+                    row.update(decode_at_ctx(model, np.load(r)["ids"], mk, n=decode_n))
+                res["rows"][key] = row
+                res["summary"] = summarize(res)
+                tmp = out.with_suffix(".tmp")
+                tmp.write_text(json.dumps(res, indent=1))
+                tmp.replace(out)  # atomic: an interrupt never leaves a half-written file
+                print(key, {k: round(v, 4) if isinstance(v, float) else v for k, v in row.items()}, flush=True)
+            # checked on finished rows too, so a resume can't skip past a recorded blow-up
             peak = max(row["peak_mem_gb"], row.get("decode_peak_gpu_gb", 0))
             if peak > PEAK_ABORT_GB:
                 raise SystemExit(f"{key}: peak {peak:.2f} GB > {PEAK_ABORT_GB} GB; stopping before longer sessions")
