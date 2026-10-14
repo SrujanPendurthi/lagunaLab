@@ -12,7 +12,7 @@
 
 ## Checklist
 
-- [ ] **Gate:** `results/action_diag.json` exists and the human confirmed the pruned model (`models/Laguna-XS-2.1-pruned-50`) is the base for Part 3
+- [x] **Gate:** `results/action_diag.json` exists and the human confirmed the pruned model (`models/Laguna-XS-2.1-pruned-50`) is the base for Part 3
 - [ ] P3-1 `make_quantized_cache`, tiny tests
 - [ ] P3-2 `score` / `assistant_logprobs` accept a cache factory, tiny test
 - [ ] P3-3 `scripts/bench_kv.py`, tiny dry-run test
