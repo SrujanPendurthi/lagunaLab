@@ -17,7 +17,7 @@
 - [x] P3-2 `score` / `assistant_logprobs` accept a cache factory, tiny test
 - [x] P3-3 `scripts/bench_kv.py`, tiny dry-run test
 - [x] P3-4 Real-model run, writing `results/kv.json`
-- [ ] **Human decision:** accept the setting the gate picks, or change the budget/thresholds
+- [x] **Human decision:** accept the setting the gate picks, or change the budget/thresholds
 - [ ] Final review for Part 3 (whole-diff reviewer)
 
 ## Global Constraints

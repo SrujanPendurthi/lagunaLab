@@ -139,3 +139,7 @@ Options for the human (none started):
 3. Spec fallback 1: smaller prefill chunk (1024) for resident 4-bit on the
    longest session only (~25 min GPU), to recover the 0.29 GB.
 4. Spec fallback 2: higher pruning ratio (new base, redo quality work).
+
+**Decision (human, 2026-10-14): option 1.** Pruned streaming with the plain cache is
+the 16 GB answer for the longest captured session. KV quantization stays in the
+codebase (`make_quantized_cache`) but is not the operating point.
