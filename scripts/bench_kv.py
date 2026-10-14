@@ -22,7 +22,7 @@ PACK = "models/Laguna-XS-2.1-pruned-50-packed"
 HELDOUT = sorted(glob.glob("traces/django__*.jsonl"))
 REFS = Path("refs/kv")
 OUT = Path("results/kv.json")
-CAP = 131072  # above the longest captured session (~78k); build_ref's default would truncate
+CAP = 131072  # above the longest captured session (82,671 tokens); build_ref's default would truncate
 BUDGET_GB = 12.0  # 75% of 16 GB: stand-in for a 16 GB Mac's recommended working set
 MIN_TOP1, MAX_KL = 0.98, 0.02
 # Plain cache peaks at 14.6 GB at 82k tokens. A row above this means the attention path is

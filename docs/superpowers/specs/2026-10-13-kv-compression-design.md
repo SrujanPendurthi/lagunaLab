@@ -2,7 +2,7 @@
 
 ## Goal
 
-Run the longest captured agent session (~78k tokens) on the pruned Laguna XS 2.1
+Run the longest captured agent session (82,671 tokens) on the pruned Laguna XS 2.1
 (reap, uniform, 0.5) inside the memory a 16 GB Mac would give it, at a measured
 quality cost. This closes the target story from Part 1: *Laguna XS on a 16 GB
 laptop with long agent sessions.*
@@ -14,7 +14,7 @@ maximum context. Stop at the first setting that passes the gate.
 
 - Full-attention layers (0, 4, …, 36): 10 layers × 8 KV heads × head_dim 128 ×
   2 (K and V) × 2 bytes (bf16) = 40,960 bytes per token. The captured sessions
-  are 57–78k tokens, so 2.3–3.2 GB of KV.
+  are 42.8k–82.7k tokens, so 1.8–3.4 GB of KV.
 - Sliding layers hold a fixed 512-token window (~60 MB total). Not touched.
 - Pruned model, from `results/prune_point.json`: resident peak 10.1 GB,
   streaming (slots=32) peak 3.97 GB. Both measured on short prompts.
@@ -39,8 +39,9 @@ Not yet measured, and assumed below: the peak during prefill of a long session
    records the peak. Estimates: resident ≈ 13.3 GB (over budget), streaming ≈
    7.2 GB (fits). A target that already fits needs no compression, and the
    writeup says so.
-3. **Method:** `QuantizedKVCache` on the 10 full-attention layers, at 8 and
-   4 bits. No new quantizer.
+3. **Method:** `QuantizedKVCache` storage on the 10 full-attention layers, at
+   8 and 4 bits, wrapped in `DequantKVCache` for attention (decision 7). No new
+   quantizer.
 4. **Reference:** the pruned resident model with the plain cache. Part 3
    measures the damage KV compression adds on top of pruning, not the total
    against the unpruned model.
@@ -61,7 +62,7 @@ Not yet measured, and assumed below: the peak during prefill of a long session
 ## Components
 
 ```
-laguna_mlx/cache.py     make_quantized_cache(model, bits): QuantizedKVCache on full
+laguna_mlx/cache.py     make_quantized_cache(model, bits): DequantKVCache on full
                         layers, RotatingKVCache on sliding layers
 replay/replay.py        score() and assistant_logprobs() accept an optional cache
                         factory (default: model.make_cache)
@@ -76,7 +77,7 @@ results/kv.json         one row per (target, bits): peak GPU, KV bytes, prefill 
 Tiny config only:
 - With `make_quantized_cache`, logits stay close to the plain cache, and 8-bit
   is closer than 4-bit.
-- Sliding layers get `RotatingKVCache` and full layers get `QuantizedKVCache`,
+- Sliding layers get `RotatingKVCache` and full layers get `DequantKVCache`,
   matched by `layer_types`.
 - Chunked prefill followed by single-token steps gives the same logits as one
   pass with the same quantized cache (cache growth across the 256-step
@@ -96,7 +97,7 @@ Tiny config only:
 - **Prefill activation spike** may dominate the peak, so compressing KV alone
   might not reach the budget. Step 0 shows this; the fallback is a smaller
   prefill chunk, then a higher pruning ratio.
-- **Full-length replay is slow.** Five sessions of 57–78k tokens per setting.
+- **Full-length replay is slow.** Five sessions of 42.8k–82.7k tokens per setting.
   The bench is resumable per (target, bits, session).
 - **Pruned base in question:** greedy action match on the pruned model is 0.3
   (`results/prune_point.json`). `scripts/diag_actions.py` is checking whether
@@ -119,6 +120,10 @@ longest 82,671 tokens; peak = max of prefill and decode peak).
 | resident 8-bit    | 13.16   | 1.80  | 0.9963 | 0.0020  | 0.050      | 109.5         | 4.10         | fail: budget |
 | resident 4-bit    | 12.29   | 0.95  | 0.9944 | 0.0038  | 0.120      | 114.5         | 4.99         | fail: budget (+0.29 GB) |
 | streaming plain   | 8.04    | 3.39  | 1.0    | 0       | 0          | 69.6          | 4.69         | pass |
+
+prefill tok/s: resident rows are the mean over 5 sessions (includes the 42.8k one);
+streaming is the longest session only. Longest session alone, resident: 92.6 plain,
+104.0 8-bit, 102.4 4-bit.
 
 - **No resident setting passes.** Quality holds at both 8 and 4 bits (every row
   top-1 ≥ 0.9878, KL mean ≤ 0.0142); the budget is what fails. 4-bit misses by
