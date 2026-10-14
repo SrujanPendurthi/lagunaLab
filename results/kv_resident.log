@@ -1,0 +1,66 @@
+[transformers] The tokenizer you are loading from 'models/Laguna-XS-2.1-pruned-50' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+ref django__django-10914
+ref django__django-10924
+ref django__django-11001
+ref django__django-11019
+ref django__django-11039
+resident/plain/django__django-11019 {'tokens': 42771, 'assistant_tokens': 18397, 'truncated': False, 'kl_top64_mean': 0.0, 'kl_top64_p99': 0.0, 'top1_agree': 1.0, 'peak_mem_gb': 12.8133, 'tok_per_s': 106.6065}
+[transformers] The tokenizer you are loading from 'models/Laguna-XS-2.1-pruned-50' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+resident/plain/django__django-10914 {'tokens': 78112, 'assistant_tokens': 21740, 'truncated': False, 'kl_top64_mean': 0.0, 'kl_top64_p99': 0.0, 'top1_agree': 1.0, 'peak_mem_gb': 14.3828, 'tok_per_s': 94.7739}
+resident/plain/django__django-11001 {'tokens': 80540, 'assistant_tokens': 43083, 'truncated': False, 'kl_top64_mean': 0.0, 'kl_top64_p99': 0.0, 'top1_agree': 1.0, 'peak_mem_gb': 14.504, 'tok_per_s': 91.1098}
+resident/plain/django__django-10924 {'tokens': 82196, 'assistant_tokens': 28551, 'truncated': False, 'kl_top64_mean': 0.0, 'kl_top64_p99': 0.0, 'top1_agree': 1.0, 'peak_mem_gb': 14.5275, 'tok_per_s': 93.9803}
+resident/plain/django__django-11039 {'tokens': 82671, 'assistant_tokens': 44204, 'truncated': False, 'kl_top64_mean': 0.0, 'kl_top64_p99': 0.0, 'top1_agree': 1.0, 'peak_mem_gb': 14.5959, 'tok_per_s': 92.6088, 'kv_gb': 3.3869, 'decode_tok_s': 7.416, 'decode_peak_gpu_gb': 14.4933}
+resident/8/django__django-11019 {'tokens': 42771, 'assistant_tokens': 18397, 'truncated': False, 'kl_top64_mean': 0.0081, 'kl_top64_p99': 0.0594, 'top1_agree': 0.9912, 'peak_mem_gb': 19.919, 'tok_per_s': 90.597}
+[transformers] The tokenizer you are loading from 'models/Laguna-XS-2.1-pruned-50' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+resident/8/django__django-11019 {'tokens': 42771, 'assistant_tokens': 18397, 'truncated': False, 'kl_top64_mean': 0.0081, 'kl_top64_p99': 0.0499, 'top1_agree': 0.9922, 'peak_mem_gb': 12.1261, 'tok_per_s': 135.455}
+resident/8/django__django-10914 {'tokens': 78112, 'assistant_tokens': 21740, 'truncated': False, 'kl_top64_mean': 0.0015, 'kl_top64_p99': 0.0254, 'top1_agree': 0.9938, 'peak_mem_gb': 12.97, 'tok_per_s': 99.2052}
+resident/8/django__django-11001 {'tokens': 80540, 'assistant_tokens': 43083, 'truncated': False, 'kl_top64_mean': 0.0008, 'kl_top64_p99': 0.0147, 'top1_agree': 0.9975, 'peak_mem_gb': 13.0689, 'tok_per_s': 103.9251}
+resident/8/django__django-10924 {'tokens': 82196, 'assistant_tokens': 28551, 'truncated': False, 'kl_top64_mean': 0.0014, 'kl_top64_p99': 0.024, 'top1_agree': 0.9961, 'peak_mem_gb': 13.0404, 'tok_per_s': 104.8148}
+resident/8/django__django-11039 {'tokens': 82671, 'assistant_tokens': 44204, 'truncated': False, 'kl_top64_mean': 0.0015, 'kl_top64_p99': 0.0131, 'top1_agree': 0.9983, 'peak_mem_gb': 13.158, 'tok_per_s': 103.9992, 'kv_gb': 1.7993, 'decode_tok_s': 4.1002, 'decode_peak_gpu_gb': 13.0888}
+resident/4/django__django-11019 {'tokens': 42771, 'assistant_tokens': 18397, 'truncated': False, 'kl_top64_mean': 0.0142, 'kl_top64_p99': 0.1201, 'top1_agree': 0.9878, 'peak_mem_gb': 11.6605, 'tok_per_s': 138.698}
+resident/4/django__django-10914 {'tokens': 78112, 'assistant_tokens': 21740, 'truncated': False, 'kl_top64_mean': 0.0033, 'kl_top64_p99': 0.0586, 'top1_agree': 0.9908, 'peak_mem_gb': 12.1879, 'tok_per_s': 106.2689}
+[transformers] The tokenizer you are loading from 'models/Laguna-XS-2.1-pruned-50' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+resident/4/django__django-11001 {'tokens': 80540, 'assistant_tokens': 43083, 'truncated': False, 'kl_top64_mean': 0.0019, 'kl_top64_p99': 0.0311, 'top1_agree': 0.9965, 'peak_mem_gb': 12.2511, 'tok_per_s': 121.6921}
+resident/4/django__django-10924 {'tokens': 82196, 'assistant_tokens': 28551, 'truncated': False, 'kl_top64_mean': 0.0031, 'kl_top64_p99': 0.0553, 'top1_agree': 0.9932, 'peak_mem_gb': 12.2238, 'tok_per_s': 103.63}
+resident/4/django__django-11039 {'tokens': 82671, 'assistant_tokens': 44204, 'truncated': False, 'kl_top64_mean': 0.0021, 'kl_top64_p99': 0.024, 'top1_agree': 0.9976, 'peak_mem_gb': 12.2851, 'tok_per_s': 102.4104, 'kv_gb': 0.9526, 'decode_tok_s': 4.9872, 'decode_peak_gpu_gb': 12.1825}
+{
+ "resident/4": {
+  "sessions": 5,
+  "kl_mean": 0.003841287954841785,
+  "kl_p99_max": 0.12006637454032898,
+  "top1": 0.9943644814874179,
+  "prefill_tok_s": 114.53987329801653,
+  "peak_gpu_gb": 12.285060774,
+  "kv_gb": 0.95256576,
+  "decode_tok_s": 4.987245670910419,
+  "longest_tokens": 82671,
+  "fits": false,
+  "passes": false
+ },
+ "resident/8": {
+  "sessions": 5,
+  "kl_mean": 0.002043316825041104,
+  "kl_p99_max": 0.049877386540174484,
+  "top1": 0.9963327456323129,
+  "prefill_tok_s": 109.47985329186092,
+  "peak_gpu_gb": 13.158023273,
+  "kv_gb": 1.79929088,
+  "decode_tok_s": 4.100159146594501,
+  "longest_tokens": 82671,
+  "fits": false,
+  "passes": false
+ },
+ "resident/plain": {
+  "sessions": 5,
+  "kl_mean": 0.0,
+  "kl_p99_max": 0.0,
+  "top1": 1.0,
+  "prefill_tok_s": 95.81585006317083,
+  "peak_gpu_gb": 14.595860122,
+  "kv_gb": 3.38690048,
+  "decode_tok_s": 7.41604597735328,
+  "longest_tokens": 82671,
+  "fits": false,
+  "passes": false
+ }
+}

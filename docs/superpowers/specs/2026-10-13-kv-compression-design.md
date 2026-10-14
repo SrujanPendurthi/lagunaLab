@@ -107,3 +107,35 @@ Tiny config only:
 
 Token eviction, compressing sliding layers, context beyond the captured
 sessions (toward the 262k limit), and SWE-bench end-to-end solve rate.
+
+## Result (P3-4, 2026-10-14)
+
+All numbers from `results/kv.json` (pruned-50, 5 django sessions at full length,
+longest 82,671 tokens; peak = max of prefill and decode peak).
+
+| setting           | peak GB | KV GB | top-1  | KL mean | KL p99 max | prefill tok/s | decode tok/s | gate |
+|-------------------|---------|-------|--------|---------|------------|---------------|--------------|------|
+| resident plain    | 14.60   | 3.39  | 1.0    | 0       | 0          | 95.8          | 7.42         | fail: budget |
+| resident 8-bit    | 13.16   | 1.80  | 0.9963 | 0.0020  | 0.050      | 109.5         | 4.10         | fail: budget |
+| resident 4-bit    | 12.29   | 0.95  | 0.9944 | 0.0038  | 0.120      | 114.5         | 4.99         | fail: budget (+0.29 GB) |
+| streaming plain   | 8.04    | 3.39  | 1.0    | 0       | 0          | 69.6          | 4.69         | pass |
+
+- **No resident setting passes.** Quality holds at both 8 and 4 bits (every row
+  top-1 ≥ 0.9878, KL mean ≤ 0.0142); the budget is what fails. 4-bit misses by
+  0.29 GB at 82k (12.19 GB already at 78k).
+- **Streaming needs no compression.** Pruned streaming (slots=32) with the plain
+  cache runs the longest session at 8.04 GB, 4 GB under budget, identical to
+  resident (top-1 1.0, KL 0).
+- Peak minus KV is ~11.2–11.4 GB in every resident setting (short-prompt resident peak 10.1 GB, `results/prune_point.json`, plus
+  ~1.4 GB prefill working set). Shrinking KV past 4-bit cannot reach 12 GB; the
+  working set is what's left.
+- Quantized KV decodes slower than plain (4.1 / 5.0 vs 7.4 tok/s at 82k):
+  `DequantKVCache` re-dequantizes the whole layer per token (decision 7).
+  Prefill is faster with quantized KV (110–115 vs 96 tok/s), not measured why.
+
+Options for the human (none started):
+1. Accept streaming/plain as the 16 GB answer: fits with no KV compression.
+2. Raise the budget to ~12.3 GB and accept resident 4-bit.
+3. Spec fallback 1: smaller prefill chunk (1024) for resident 4-bit on the
+   longest session only (~25 min GPU), to recover the 0.29 GB.
+4. Spec fallback 2: higher pruning ratio (new base, redo quality work).

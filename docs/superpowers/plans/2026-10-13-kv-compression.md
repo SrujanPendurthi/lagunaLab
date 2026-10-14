@@ -13,10 +13,10 @@
 ## Checklist
 
 - [x] **Gate:** `results/action_diag.json` exists and the human confirmed the pruned model (`models/Laguna-XS-2.1-pruned-50`) is the base for Part 3
-- [ ] P3-1 `make_quantized_cache`, tiny tests
-- [ ] P3-2 `score` / `assistant_logprobs` accept a cache factory, tiny test
-- [ ] P3-3 `scripts/bench_kv.py`, tiny dry-run test
-- [ ] P3-4 Real-model run, writing `results/kv.json`
+- [x] P3-1 `make_quantized_cache`, tiny tests
+- [x] P3-2 `score` / `assistant_logprobs` accept a cache factory, tiny test
+- [x] P3-3 `scripts/bench_kv.py`, tiny dry-run test
+- [x] P3-4 Real-model run, writing `results/kv.json`
 - [ ] **Human decision:** accept the setting the gate picks, or change the budget/thresholds
 - [ ] Final review for Part 3 (whole-diff reviewer)
 
