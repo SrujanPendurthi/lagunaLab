@@ -5,8 +5,9 @@ import numpy as np
 import pytest
 from transformers import AutoTokenizer
 
+from laguna_mlx.cache import make_quantized_cache
 from replay.replay import build_ref, score, score_actions
-from tests.tiny import mlx_model, torch_model
+from tests.tiny import mlx_model, mlx_only_model, torch_model
 
 MESSAGES = [
     {"role": "user", "content": "list files"},
@@ -54,3 +55,14 @@ def test_long_session_is_truncated_not_fatal(tok, session, tmp_path):
     build_ref(mlx_model(torch_model()), tok, session, ref, max_tokens=50, n_actions=0)
     s = score(mlx_model(torch_model()), ref)
     assert s["truncated"] and s["tokens"] == 50
+
+
+def test_score_with_cache_factory(tok, session, tmp_path):
+    m = mlx_only_model(head_dim=64)
+    ref = tmp_path / "s.npz"
+    build_ref(m, tok, session, ref, n_actions=0)
+    default = score(m, ref)
+    explicit = score(m, ref, make_cache=m.make_cache)
+    assert explicit["kl_top64_mean"] == default["kl_top64_mean"] and explicit["top1_agree"] == 1.0
+    q4 = score(m, ref, make_cache=lambda: make_quantized_cache(m, 4))
+    assert q4["kl_top64_mean"] > abs(default["kl_top64_mean"]) + 1e-6  # the factory is really used

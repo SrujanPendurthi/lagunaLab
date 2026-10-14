@@ -20,11 +20,11 @@ TOPK = 64
 SUB = 256  # positions per log-softmax batch: 256 x 100k vocab x 4 B = 100 MB
 
 
-def assistant_logprobs(model, ids, mask, chunk=2048):
+def assistant_logprobs(model, ids, mask, chunk=2048, make_cache=None):
     """Yield (positions, logprobs[n, V] float32) for positions whose next token is assistant."""
     target = np.zeros_like(mask)
     target[:-1] = mask[1:]
-    cache = model.make_cache()
+    cache = (make_cache or model.make_cache)()
     for a in range(0, len(ids), chunk):
         b = min(a + chunk, len(ids))
         h = model.model(mx.array(ids[None, a:b]), cache=cache)[0]
@@ -78,13 +78,13 @@ def build_ref(model, tokenizer, session_path, out_path, max_tokens=65536, n_acti
                         actions=json.dumps(actions), max_new=max_new)
 
 
-def score(model, ref_path, chunk=2048):
+def score(model, ref_path, chunk=2048, make_cache=None):
     ref = np.load(ref_path)
     ids, mask = ref["ids"], ref["mask"]
     kls, agree, i = [], [], 0
     mx.reset_peak_memory()
     t0 = time.perf_counter()
-    for p, lp in assistant_logprobs(model, ids, mask, chunk):
+    for p, lp in assistant_logprobs(model, ids, mask, chunk, make_cache):
         n = len(p)
         assert (p == ref["pos"][i : i + n]).all(), "position mismatch vs reference"
         tid = mx.array(ref["top_ids"][i : i + n])
