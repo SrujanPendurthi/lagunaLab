@@ -50,10 +50,13 @@ Not yet measured, and assumed below: the peak during prefill of a long session
 6. **Gate:** the least compression that keeps the longest session under the
    budget with top-1 ≥ 0.98 and KL mean ≤ 0.02 nats against the plain cache.
 7. **Speed is reported, not gated:** prefill and decode tok/s per setting.
-   mlx-lm attends over the quantized cache directly (`mx.quantized_matmul`), so
-   nothing is dequantized in bulk, but that kernel may be slower than the plain
-   attention path. If speed makes the setting unusable, that becomes its own
-   task, with its own test.
+   mlx-lm's quantized attention (`quantized_scaled_dot_product_attention`)
+   materializes the full [heads, chunk, context] score matrix: ~16 GB per layer
+   at 82k context. The first P3-4 run hit this on the 8-bit setting, hung the
+   machine and caused a watchdog reboot (2026-10-13 20:44). The cache therefore
+   stores K/V quantized but dequantizes one layer at a time and attends with
+   mx.fast's fused kernel (`DequantKVCache`). Decode re-dequantizes each layer
+   per token; if that makes decode unusable, it becomes its own task.
 
 ## Components
 

@@ -1,9 +1,9 @@
 import mlx.core as mx
 import numpy as np
 import pytest
-from mlx_lm.models.cache import QuantizedKVCache, RotatingKVCache
+from mlx_lm.models.cache import RotatingKVCache
 
-from laguna_mlx.cache import make_quantized_cache
+from laguna_mlx.cache import DequantKVCache, make_quantized_cache
 from tests.tiny import TINY, mlx_model, mlx_only_model, torch_model
 
 # window is 8: splits cross it mid-chunk, at chunk edges, and in one big prefill
@@ -41,7 +41,8 @@ def test_quantized_cache_layout_follows_layer_types(model64):
     cache = make_quantized_cache(model64, bits=4)
     for c, lt in zip(cache, model64.args.layer_types):
         if lt == "full_attention":
-            assert isinstance(c, QuantizedKVCache) and c.bits == 4 and c.group_size == 64
+            assert isinstance(c, DequantKVCache) and c.kv_bits == 4 and c.group_size == 64
+            assert not hasattr(c, "bits")  # else mlx-lm routes it to its quantized SDPA
         else:
             assert isinstance(c, RotatingKVCache) and c.max_size == TINY["sliding_window"]
 
@@ -73,3 +74,20 @@ def test_quantized_cache_chunked_matches_one_pass(model64):
 def test_quantized_cache_rejects_indivisible_head_dim(model):
     with pytest.raises(ValueError, match="head_dim"):
         make_quantized_cache(model, 8)  # shared tiny model: head_dim 16, group size 64
+
+
+def test_quantized_cache_prefill_never_materializes_scores(model64):
+    # mlx-lm's quantized attention builds the full [heads, L, kL] score matrix: 4 x 4096 x 4096
+    # x 4 B = 268 MB here, ~16 GB per layer on the real model at 82k context (it hung the Mac).
+    ids = _ids(4096)
+
+    def prefill_peak(cache):
+        mx.eval(ids)
+        mx.reset_peak_memory()
+        base = mx.get_active_memory()
+        mx.eval(model64.model(ids, cache=cache))
+        return mx.get_peak_memory() - base
+
+    plain = prefill_peak(model64.make_cache())
+    quant = prefill_peak(make_quantized_cache(model64, 8))
+    assert quant < plain + 100e6, (plain, quant)

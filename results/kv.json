@@ -1,0 +1,73 @@
+{
+ "rows": {
+  "resident/plain/django__django-11019": {
+   "tokens": 42771,
+   "assistant_tokens": 18397,
+   "truncated": false,
+   "kl_top64_mean": 0.0,
+   "kl_top64_p99": 0.0,
+   "top1_agree": 1.0,
+   "peak_mem_gb": 12.813346536,
+   "tok_per_s": 106.60650371963902
+  },
+  "resident/plain/django__django-10914": {
+   "tokens": 78112,
+   "assistant_tokens": 21740,
+   "truncated": false,
+   "kl_top64_mean": 0.0,
+   "kl_top64_p99": 0.0,
+   "top1_agree": 1.0,
+   "peak_mem_gb": 14.382802586,
+   "tok_per_s": 94.77393388821467
+  },
+  "resident/plain/django__django-11001": {
+   "tokens": 80540,
+   "assistant_tokens": 43083,
+   "truncated": false,
+   "kl_top64_mean": 0.0,
+   "kl_top64_p99": 0.0,
+   "top1_agree": 1.0,
+   "peak_mem_gb": 14.50397865,
+   "tok_per_s": 91.10975129033724
+  },
+  "resident/plain/django__django-10924": {
+   "tokens": 82196,
+   "assistant_tokens": 28551,
+   "truncated": false,
+   "kl_top64_mean": 0.0,
+   "kl_top64_p99": 0.0,
+   "top1_agree": 1.0,
+   "peak_mem_gb": 14.527522458,
+   "tok_per_s": 93.98029689402077
+  },
+  "resident/plain/django__django-11039": {
+   "tokens": 82671,
+   "assistant_tokens": 44204,
+   "truncated": false,
+   "kl_top64_mean": 0.0,
+   "kl_top64_p99": 0.0,
+   "top1_agree": 1.0,
+   "peak_mem_gb": 14.595860122,
+   "tok_per_s": 92.60876452364249,
+   "kv_gb": 3.38690048,
+   "decode_tok_s": 7.41604597735328,
+   "decode_peak_gpu_gb": 14.49329423
+  }
+ },
+ "budget_gb": 12.0,
+ "summary": {
+  "resident/plain": {
+   "sessions": 5,
+   "kl_mean": 0.0,
+   "kl_p99_max": 0.0,
+   "top1": 1.0,
+   "prefill_tok_s": 95.81585006317083,
+   "peak_gpu_gb": 14.595860122,
+   "kv_gb": 3.38690048,
+   "decode_tok_s": 7.41604597735328,
+   "longest_tokens": 82671,
+   "fits": false,
+   "passes": false
+  }
+ }
+}

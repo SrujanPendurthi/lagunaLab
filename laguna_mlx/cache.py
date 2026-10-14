@@ -63,13 +63,64 @@ def make_trimmable_cache(model, slack=64):
     ]
 
 
+class DequantKVCache(_BaseCache):
+    """Stores K/V quantized (mlx-lm's QuantizedKVCache) and hands attention bf16 K/V, one layer
+    at a time, so mx.fast's fused SDPA runs. mlx-lm's quantized SDPA would materialize the full
+    [heads, L, context] score matrix: ~16 GB per layer at 82k context, which hung the machine.
+
+    No `bits` attribute on purpose: mlx-lm routes any cache with one to its quantized SDPA.
+    """
+
+    def __init__(self, group_size=64, bits=8):
+        self.q = QuantizedKVCache(group_size=group_size, bits=bits)
+
+    def update_and_fetch(self, keys, values):
+        # ponytail: decode re-dequantizes the whole layer every token (~0.3 GB per layer at
+        # 82k); keep a bf16 copy of the prefix or use quantized SDPA for L == 1 if decode is slow
+        qk, qv = self.q.update_and_fetch(keys, values)
+        g, b = self.q.group_size, self.q.bits
+        return mx.dequantize(*qk, group_size=g, bits=b), mx.dequantize(*qv, group_size=g, bits=b)
+
+    @property
+    def offset(self):
+        return self.q.offset
+
+    @property
+    def kv_bits(self):
+        return self.q.bits
+
+    @property
+    def group_size(self):
+        return self.q.group_size
+
+    def make_mask(self, *args, **kwargs):
+        return self.q.make_mask(*args, **kwargs)
+
+    @property
+    def state(self):
+        return self.q.state
+
+    def is_trimmable(self):
+        return True
+
+    def trim(self, n):
+        return self.q.trim(n)
+
+    def empty(self):
+        return self.q.empty()
+
+    @property
+    def nbytes(self):
+        return self.q.nbytes
+
+
 def make_quantized_cache(model, bits=8, group_size=64):
-    """mlx-lm's quantized KV cache on full-attention layers; sliding layers keep their window."""
+    """Quantized KV storage on full-attention layers; sliding layers keep their window."""
     a = model.args
     if a.head_dim % group_size:
         raise ValueError(f"head_dim {a.head_dim} is not a multiple of group_size {group_size}")
     return [
         RotatingKVCache(max_size=a.sliding_window)
-        if lt == "sliding_attention" else QuantizedKVCache(group_size=group_size, bits=bits)
+        if lt == "sliding_attention" else DequantKVCache(group_size=group_size, bits=bits)
         for lt in a.layer_types
     ]
