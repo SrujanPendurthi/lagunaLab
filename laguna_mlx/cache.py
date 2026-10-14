@@ -1,7 +1,7 @@
 """Sliding-window KV cache that can be trimmed, for speculative decoding."""
 import mlx.core as mx
 from mlx_lm.models.base import create_causal_mask
-from mlx_lm.models.cache import KVCache, _BaseCache
+from mlx_lm.models.cache import KVCache, QuantizedKVCache, RotatingKVCache, _BaseCache
 
 
 class TrimmableWindowCache(_BaseCache):
@@ -60,4 +60,16 @@ def make_trimmable_cache(model, slack=64):
         TrimmableWindowCache(model.args.sliding_window, slack)
         if lt == "sliding_attention" else KVCache()
         for lt in model.args.layer_types
+    ]
+
+
+def make_quantized_cache(model, bits=8, group_size=64):
+    """mlx-lm's quantized KV cache on full-attention layers; sliding layers keep their window."""
+    a = model.args
+    if a.head_dim % group_size:
+        raise ValueError(f"head_dim {a.head_dim} is not a multiple of group_size {group_size}")
+    return [
+        RotatingKVCache(max_size=a.sliding_window)
+        if lt == "sliding_attention" else QuantizedKVCache(group_size=group_size, bits=bits)
+        for lt in a.layer_types
     ]

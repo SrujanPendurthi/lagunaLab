@@ -1,8 +1,10 @@
 import mlx.core as mx
 import numpy as np
 import pytest
+from mlx_lm.models.cache import QuantizedKVCache, RotatingKVCache
 
-from tests.tiny import TINY, mlx_model, torch_model
+from laguna_mlx.cache import make_quantized_cache
+from tests.tiny import TINY, mlx_model, mlx_only_model, torch_model
 
 # window is 8: splits cross it mid-chunk, at chunk edges, and in one big prefill
 SPLITS = {
@@ -24,3 +26,50 @@ def test_cached_forward_matches_full_forward(model, split):
     cache = model.make_cache()
     outs = [np.array(model(ids[:, a:b], cache=cache)) for a, b in SPLITS[split]]
     np.testing.assert_allclose(np.concatenate(outs, axis=1), full, atol=1e-4, rtol=1e-3)
+
+
+@pytest.fixture(scope="module")
+def model64():
+    return mlx_only_model(head_dim=64)  # mx.quantize needs a group size of 32, 64 or 128
+
+
+def _ids(n):
+    return mx.array(np.random.default_rng(1).integers(0, TINY["vocab_size"], size=(1, n)))
+
+
+def test_quantized_cache_layout_follows_layer_types(model64):
+    cache = make_quantized_cache(model64, bits=4)
+    for c, lt in zip(cache, model64.args.layer_types):
+        if lt == "full_attention":
+            assert isinstance(c, QuantizedKVCache) and c.bits == 4 and c.group_size == 64
+        else:
+            assert isinstance(c, RotatingKVCache) and c.max_size == TINY["sliding_window"]
+
+
+def test_quantized_cache_error_shrinks_with_bits_and_cache_is_smaller(model64):
+    ids = _ids(300)
+    full = np.array(model64(ids))
+    plain = model64.make_cache()
+    mx.eval(model64(ids, cache=plain))
+    err, size = {}, {}
+    for bits in (8, 4):
+        cache = make_quantized_cache(model64, bits)
+        # mean, not max: a small KV error can flip an expert's top-k routing at a few positions
+        err[bits] = float(np.abs(np.array(model64(ids, cache=cache)) - full).mean())
+        size[bits] = cache[0].nbytes
+    assert err[8] < 0.05 and err[8] < err[4]
+    assert size[4] < size[8] < plain[0].nbytes
+
+
+def test_quantized_cache_chunked_matches_one_pass(model64):
+    ids = _ids(300)  # crosses QuantizedKVCache.step (256) mid-chunk, then single-token steps
+    one = np.array(model64(ids, cache=make_quantized_cache(model64, 8)))
+    cache = make_quantized_cache(model64, 8)
+    splits = [(0, 200), (200, 260)] + [(i, i + 1) for i in range(260, 300)]
+    outs = [np.array(model64(ids[:, a:b], cache=cache)) for a, b in splits]
+    np.testing.assert_allclose(np.concatenate(outs, axis=1), one, atol=1e-4, rtol=1e-3)
+
+
+def test_quantized_cache_rejects_indivisible_head_dim(model):
+    with pytest.raises(ValueError, match="head_dim"):
+        make_quantized_cache(model, 8)  # shared tiny model: head_dim 16, group size 64

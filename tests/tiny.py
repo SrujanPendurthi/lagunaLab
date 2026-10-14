@@ -93,3 +93,11 @@ def quantized_model_dir(tmp_path, seed=0, dtype=None):
     mx.save_safetensors(str(d / "model.safetensors"), dict(tree_flatten(m.parameters())))
     (d / "config.json").write_text(json.dumps({**TINY, "quantization": {"group_size": 32, "bits": 4}}))
     return d, m
+
+
+def mlx_only_model(seed=0, **overrides):
+    """Random-weight tiny model with config overrides (no PyTorch twin), e.g. head_dim=64."""
+    mx.random.seed(seed)
+    m = laguna.Model(laguna.ModelArgs.from_dict({**copy.deepcopy(TINY), **overrides}))
+    mx.eval(m.parameters())
+    return m
