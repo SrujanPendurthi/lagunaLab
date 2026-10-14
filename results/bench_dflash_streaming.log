@@ -1,0 +1,6 @@
+[transformers] The tokenizer you are loading from 'models/Laguna-XS-2.1-packed' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+baseline tok/s 11.419673258136083 swap ('baseline', 0.590634765625)
+{'target': 'streaming', 'draft_bits': 16, 'n_draft': 3, 'tok_s': 12.070020712970345, 'mean_accepted': 1.8413775761108127, 'identical_frac': 0.0, 'speedup': 1.0569497427932901} swap ('bits16_n3', 0.512509765625)
+{'target': 'streaming', 'draft_bits': 16, 'n_draft': 7, 'tok_s': 7.380407399362258, 'mean_accepted': 2.326690193770538, 'identical_frac': 0.1, 'speedup': 0.6462888414170693} swap ('bits16_n7', 0.504697265625)
+{'target': 'streaming', 'draft_bits': 16, 'n_draft': 15, 'tok_s': 3.655437746669618, 'mean_accepted': 2.7497867867560313, 'identical_frac': 0.0, 'speedup': 0.3201000294877314} swap ('bits16_n15', 0.51361328125)
+EXIT 0

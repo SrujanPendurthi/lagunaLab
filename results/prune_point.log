@@ -1,0 +1,29 @@
+[transformers] The tokenizer you are loading from 'models/Laguna-XS-2.1-mlx-4bit' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+[transformers] The tokenizer you are loading from 'models/Laguna-XS-2.1-pruned-50' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+[transformers] The tokenizer you are loading from 'models/Laguna-XS-2.1-pruned-50-packed' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+{
+ "criterion": "reap",
+ "ratio": 0.5,
+ "base": {
+  "decode_tok_s": 34.212542463580384,
+  "peak_gpu_gb": 18.89846597,
+  "disk_gb": 18.388316
+ },
+ "resident": {
+  "decode_tok_s": 38.651465140562806,
+  "peak_gpu_gb": 10.103299648,
+  "disk_gb": 9.7988,
+  "kl_mean": 0.08089492365456465,
+  "top1": 0.9450899977215766,
+  "action_match": 0.3
+ },
+ "streaming_slots32": {
+  "decode_tok_s": 12.797487799849542,
+  "peak_gpu_gb": 3.9705306,
+  "hits": 79487,
+  "misses": 49048,
+  "hit_rate": 0.6184074376628934,
+  "bytes_read": 86789062656,
+  "disk_gb": 9.751324
+ }
+}

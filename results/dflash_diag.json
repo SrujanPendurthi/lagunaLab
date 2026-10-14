@@ -1,0 +1,478 @@
+{
+ "targets": {
+  "resident": {
+   "swap_gb": [
+    [
+     "start",
+     0.39642578125
+    ],
+    [
+     "loaded",
+     0.8857421875
+    ],
+    [
+     "after_part_a",
+     1.3408203125
+    ],
+    [
+     "after_part_b",
+     1.68615234375
+    ]
+   ],
+   "stopped": null,
+   "equivalence": [
+    {
+     "prompt_index": 0,
+     "pairs": {
+      "std_vs_trim": {
+       "first_divergence": null
+      },
+      "trim_vs_dflash": {
+       "first_divergence": 74,
+       "logits": {
+        "trim": {
+         "top2_ids": [
+          8840,
+          2746
+         ],
+         "gap_f32": 0.0,
+         "gap_bf16_ulps": 0
+        },
+        "dflash": {
+         "top2_ids": [
+          8840,
+          2746
+         ],
+         "gap_f32": 0.0,
+         "gap_bf16_ulps": 0
+        }
+       },
+       "verdict": "tie"
+      },
+      "std_vs_dflash": {
+       "first_divergence": 74,
+       "logits": {
+        "std": {
+         "top2_ids": [
+          8840,
+          2746
+         ],
+         "gap_f32": 0.0,
+         "gap_bf16_ulps": 0
+        },
+        "dflash": {
+         "top2_ids": [
+          8840,
+          2746
+         ],
+         "gap_f32": 0.0,
+         "gap_bf16_ulps": 0
+        }
+       },
+       "verdict": "tie"
+      }
+     },
+     "verdict": "tie"
+    },
+    {
+     "prompt_index": 1,
+     "pairs": {
+      "std_vs_trim": {
+       "first_divergence": null
+      },
+      "trim_vs_dflash": {
+       "first_divergence": 104,
+       "logits": {
+        "trim": {
+         "top2_ids": [
+          14109,
+          15210
+         ],
+         "gap_f32": 0.125,
+         "gap_bf16_ulps": 1
+        },
+        "dflash": {
+         "top2_ids": [
+          15210,
+          14109
+         ],
+         "gap_f32": 0.0,
+         "gap_bf16_ulps": 0
+        }
+       },
+       "verdict": "tie"
+      },
+      "std_vs_dflash": {
+       "first_divergence": 104,
+       "logits": {
+        "std": {
+         "top2_ids": [
+          14109,
+          15210
+         ],
+         "gap_f32": 0.125,
+         "gap_bf16_ulps": 1
+        },
+        "dflash": {
+         "top2_ids": [
+          15210,
+          14109
+         ],
+         "gap_f32": 0.0,
+         "gap_bf16_ulps": 0
+        }
+       },
+       "verdict": "tie"
+      }
+     },
+     "verdict": "tie"
+    },
+    {
+     "prompt_index": 2,
+     "pairs": {
+      "std_vs_trim": {
+       "first_divergence": null
+      },
+      "trim_vs_dflash": {
+       "first_divergence": 97,
+       "logits": {
+        "trim": {
+         "top2_ids": [
+          1000,
+          11280
+         ],
+         "gap_f32": 0.375,
+         "gap_bf16_ulps": 3
+        },
+        "dflash": {
+         "top2_ids": [
+          1000,
+          11280
+         ],
+         "gap_f32": 0.375,
+         "gap_bf16_ulps": 3
+        }
+       },
+       "verdict": "non-tie"
+      },
+      "std_vs_dflash": {
+       "first_divergence": 97,
+       "logits": {
+        "std": {
+         "top2_ids": [
+          1000,
+          11280
+         ],
+         "gap_f32": 0.375,
+         "gap_bf16_ulps": 3
+        },
+        "dflash": {
+         "top2_ids": [
+          1000,
+          11280
+         ],
+         "gap_f32": 0.375,
+         "gap_bf16_ulps": 3
+        }
+       },
+       "verdict": "non-tie"
+      }
+     },
+     "verdict": "non-tie"
+    }
+   ],
+   "verify_ms": {
+    "1": {
+     "median": 25.255249987822026,
+     "iqr": 0.0775004446040839
+    },
+    "2": {
+     "median": 32.69237501081079,
+     "iqr": 0.5056984664406627
+    },
+    "3": {
+     "median": 40.63816647976637,
+     "iqr": 0.09317719377577305
+    },
+    "4": {
+     "median": 49.80081255780533,
+     "iqr": 0.22730219643563032
+    },
+    "6": {
+     "median": 83.29814556054771,
+     "iqr": 4.228083998896182
+    },
+    "8": {
+     "median": 96.38447902398184,
+     "iqr": 9.983311960240826
+    },
+    "12": {
+     "median": 118.80075046792626,
+     "iqr": 7.2742287593428046
+    },
+    "16": {
+     "median": 132.01791647588834,
+     "iqr": 8.360885491129011
+    }
+   },
+   "fit": {
+    "a": 30.60261497618438,
+    "b": 7.592431267160767
+   },
+   "propose_ms": {
+    "3": {
+     "median": 17.490812519099563,
+     "iqr": 0.07544740219600499
+    },
+    "7": {
+     "median": 20.946104545146227,
+     "iqr": 0.9915214614011347
+    },
+    "15": {
+     "median": 22.340562543831766,
+     "iqr": 0.33689531846903265
+    }
+   }
+  },
+  "streaming": {
+   "swap_gb": [
+    [
+     "start",
+     1.67833984375
+    ],
+    [
+     "loaded",
+     1.56115234375
+    ],
+    [
+     "after_part_a",
+     1.146669921875
+    ],
+    [
+     "after_part_b",
+     1.107607421875
+    ]
+   ],
+   "stopped": null,
+   "equivalence": [
+    {
+     "prompt_index": 0,
+     "pairs": {
+      "std_vs_trim": {
+       "first_divergence": null
+      },
+      "trim_vs_dflash": {
+       "first_divergence": 90,
+       "logits": {
+        "trim": {
+         "top2_ids": [
+          14210,
+          15224
+         ],
+         "gap_f32": 0.25,
+         "gap_bf16_ulps": 1
+        },
+        "dflash": {
+         "top2_ids": [
+          15224,
+          14210
+         ],
+         "gap_f32": 0.0,
+         "gap_bf16_ulps": 0
+        }
+       },
+       "verdict": "tie"
+      },
+      "std_vs_dflash": {
+       "first_divergence": 90,
+       "logits": {
+        "std": {
+         "top2_ids": [
+          14210,
+          15224
+         ],
+         "gap_f32": 0.25,
+         "gap_bf16_ulps": 1
+        },
+        "dflash": {
+         "top2_ids": [
+          15224,
+          14210
+         ],
+         "gap_f32": 0.0,
+         "gap_bf16_ulps": 0
+        }
+       },
+       "verdict": "tie"
+      }
+     },
+     "verdict": "tie"
+    },
+    {
+     "prompt_index": 1,
+     "pairs": {
+      "std_vs_trim": {
+       "first_divergence": null
+      },
+      "trim_vs_dflash": {
+       "first_divergence": 33,
+       "logits": {
+        "trim": {
+         "top2_ids": [
+          1764,
+          24676
+         ],
+         "gap_f32": 0.125,
+         "gap_bf16_ulps": 1
+        },
+        "dflash": {
+         "top2_ids": [
+          1764,
+          24676
+         ],
+         "gap_f32": 0.5,
+         "gap_bf16_ulps": 4
+        }
+       },
+       "verdict": "tie"
+      },
+      "std_vs_dflash": {
+       "first_divergence": 33,
+       "logits": {
+        "std": {
+         "top2_ids": [
+          1764,
+          24676
+         ],
+         "gap_f32": 0.125,
+         "gap_bf16_ulps": 1
+        },
+        "dflash": {
+         "top2_ids": [
+          1764,
+          24676
+         ],
+         "gap_f32": 0.5,
+         "gap_bf16_ulps": 4
+        }
+       },
+       "verdict": "tie"
+      }
+     },
+     "verdict": "tie"
+    },
+    {
+     "prompt_index": 2,
+     "pairs": {
+      "std_vs_trim": {
+       "first_divergence": null
+      },
+      "trim_vs_dflash": {
+       "first_divergence": 67,
+       "logits": {
+        "trim": {
+         "top2_ids": [
+          430,
+          330
+         ],
+         "gap_f32": 0.25,
+         "gap_bf16_ulps": 2
+        },
+        "dflash": {
+         "top2_ids": [
+          430,
+          330
+         ],
+         "gap_f32": 0.125,
+         "gap_bf16_ulps": 1
+        }
+       },
+       "verdict": "tie"
+      },
+      "std_vs_dflash": {
+       "first_divergence": 67,
+       "logits": {
+        "std": {
+         "top2_ids": [
+          430,
+          330
+         ],
+         "gap_f32": 0.25,
+         "gap_bf16_ulps": 2
+        },
+        "dflash": {
+         "top2_ids": [
+          430,
+          330
+         ],
+         "gap_f32": 0.125,
+         "gap_bf16_ulps": 1
+        }
+       },
+       "verdict": "tie"
+      }
+     },
+     "verdict": "tie"
+    }
+   ],
+   "verify_ms": {
+    "1": {
+     "median": 37.76460455264896,
+     "iqr": 0.6111249967943877
+    },
+    "2": {
+     "median": 45.028541004285216,
+     "iqr": 0.707531493389979
+    },
+    "3": {
+     "median": 52.90924955625087,
+     "iqr": 0.21562521578744054
+    },
+    "4": {
+     "median": 61.932832992170006,
+     "iqr": 1.728135481243953
+    },
+    "6": {
+     "median": 212.0235005277209,
+     "iqr": 86.75196924014017
+    },
+    "8": {
+     "median": 305.98087498219684,
+     "iqr": 1.050719030899927
+    },
+    "12": {
+     "median": 451.4864374650642,
+     "iqr": 3.043542237719521
+    },
+    "16": {
+     "median": 574.1318539949134,
+     "iqr": 6.8954793096054345
+    }
+   },
+   "fit": {
+    "a": 1.6665258868519117,
+    "b": 39.27103836319173
+   },
+   "propose_ms": {
+    "3": {
+     "median": 19.576687482185662,
+     "iqr": 0.21798952366225421
+    },
+    "7": {
+     "median": 23.111228947527707,
+     "iqr": 0.4141571116633713
+    },
+    "15": {
+     "median": 25.030375458300114,
+     "iqr": 0.4731877997983247
+    }
+   }
+  }
+ },
+ "notes": [
+  "Timings (verify_ms, propose_ms) assume the machine is otherwise idle (run overnight); if something else was running on the machine they may be noisy.",
+  "bf16 ulp gap: round both values to bfloat16, reinterpret the 16-bit pattern as an order-preserving unsigned integer (the standard radix-sort-floats sign-flip trick), and take the absolute difference of those integers. gap(1.0, next bf16 above 1.0) == 1; gap(x, x) == 0.",
+  "Equivalence recompute at a divergence: for a divergence at the very first generated token (index 0), all three paths' first token came from a single one-shot forward over the whole prompt, so the recompute uses that same one-shot batch for every path. For a later divergence, each path's own steady-state batching is replayed instead: a single-token decode step (batch size 1) for std/trim, an (n_draft+1)-token block for dflash. Both sides use the same target weights and the same token history, so any gap tests whether batched-vs-single matmul reduction order changes the result, not a model difference.",
+  "Single run per target; no repeats for Part A (equivalence is exact-match, not a noisy metric)."
+ ]
+}

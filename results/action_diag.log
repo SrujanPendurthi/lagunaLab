@@ -1,0 +1,43 @@
+[transformers] The tokenizer you are loading from 'models/Laguna-XS-2.1-mlx-4bit' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+models/Laguna-XS-2.1-mlx-4bit django__django-10914 5464 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-10914 6301 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-10914 6984 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-10914 14343 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-10924 7740 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-10924 9112 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-10924 9345 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-10924 12105 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-11001 6602 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-11001 7587 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-11001 7907 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-11001 14980 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-11019 7317 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-11019 13257 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-11019 14694 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-11019 14910 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-11039 6494 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-11039 7660 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-11039 7871 True True
+models/Laguna-XS-2.1-mlx-4bit django__django-11039 15629 True True
+[transformers] The tokenizer you are loading from 'models/Laguna-XS-2.1-pruned-50' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+models/Laguna-XS-2.1-pruned-50 django__django-10914 5464 False True
+models/Laguna-XS-2.1-pruned-50 django__django-10914 6301 False False
+models/Laguna-XS-2.1-pruned-50 django__django-10914 6984 True True
+models/Laguna-XS-2.1-pruned-50 django__django-10914 14343 True True
+models/Laguna-XS-2.1-pruned-50 django__django-10924 7740 False False
+models/Laguna-XS-2.1-pruned-50 django__django-10924 9112 True True
+models/Laguna-XS-2.1-pruned-50 django__django-10924 9345 False True
+models/Laguna-XS-2.1-pruned-50 django__django-10924 12105 False True
+models/Laguna-XS-2.1-pruned-50 django__django-11001 6602 False True
+models/Laguna-XS-2.1-pruned-50 django__django-11001 7587 False True
+models/Laguna-XS-2.1-pruned-50 django__django-11001 7907 True True
+models/Laguna-XS-2.1-pruned-50 django__django-11001 14980 False True
+models/Laguna-XS-2.1-pruned-50 django__django-11019 7317 False True
+models/Laguna-XS-2.1-pruned-50 django__django-11019 13257 False True
+models/Laguna-XS-2.1-pruned-50 django__django-11019 14694 False True
+models/Laguna-XS-2.1-pruned-50 django__django-11019 14910 True True
+models/Laguna-XS-2.1-pruned-50 django__django-11039 6494 False True
+models/Laguna-XS-2.1-pruned-50 django__django-11039 7660 False True
+models/Laguna-XS-2.1-pruned-50 django__django-11039 7871 True True
+models/Laguna-XS-2.1-pruned-50 django__django-11039 15629 False True
+{'base': (1.0, 1.0), 'pruned': (0.3, 0.9)}

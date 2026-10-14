@@ -1,0 +1,12 @@
+[transformers] The tokenizer you are loading from 'models/Laguna-XS-2.1-mlx-4bit' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+baseline tok/s 40.29867924188328 swap ('baseline', 1.11626953125)
+{'target': 'resident', 'draft_bits': 16, 'n_draft': 3, 'tok_s': 28.521119619619583, 'mean_accepted': 1.8318398170189005, 'identical_frac': 0.0, 'speedup': 0.707743284796713} swap ('bits16_n3', 1.03814453125)
+{'target': 'resident', 'draft_bits': 16, 'n_draft': 7, 'tok_s': 22.519052919611983, 'mean_accepted': 2.2564477175651274, 'identical_frac': 0.0, 'speedup': 0.558803746009806} swap ('bits16_n7', 0.91314453125)
+{'target': 'resident', 'draft_bits': 16, 'n_draft': 15, 'tok_s': 16.689860432639904, 'mean_accepted': 2.514292378235901, 'identical_frac': 0.2, 'speedup': 0.41415403051953564} swap ('bits16_n15', 0.92669921875)
+{'target': 'resident', 'draft_bits': 8, 'n_draft': 3, 'tok_s': 34.487772527670174, 'mean_accepted': 1.8350446178360613, 'identical_frac': 0.0, 'speedup': 0.8558040406402773} swap ('bits8_n3', 1.292724609375)
+{'target': 'resident', 'draft_bits': 8, 'n_draft': 7, 'tok_s': 20.531241362571084, 'mean_accepted': 2.276023856470759, 'identical_frac': 0.0, 'speedup': 0.5094767805996114} swap ('bits8_n7', 1.456484375)
+{'target': 'resident', 'draft_bits': 8, 'n_draft': 15, 'tok_s': 14.544693342089289, 'mean_accepted': 2.5050779133698198, 'identical_frac': 0.2, 'speedup': 0.36092233332979007} swap ('bits8_n15', 1.576357421875)
+{'target': 'resident', 'draft_bits': 4, 'n_draft': 3, 'tok_s': 31.371204452738333, 'mean_accepted': 1.816190807120779, 'identical_frac': 0.0, 'speedup': 0.7784673106639577} swap ('bits4_n3', 1.085693359375)
+{'target': 'resident', 'draft_bits': 4, 'n_draft': 7, 'tok_s': 25.28406453319957, 'mean_accepted': 2.4593347299248522, 'identical_frac': 0.1, 'speedup': 0.6274167046874654} swap ('bits4_n7', 1.193173828125)
+{'target': 'resident', 'draft_bits': 4, 'n_draft': 15, 'tok_s': 16.078858046336887, 'mean_accepted': 2.510113586565705, 'identical_frac': 0.2, 'speedup': 0.3989921840819484} swap ('bits4_n15', 1.204833984375)
+EXIT 0
