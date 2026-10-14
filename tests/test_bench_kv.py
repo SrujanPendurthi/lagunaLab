@@ -60,3 +60,15 @@ def test_truncated_reference_is_refused(tok, traces, tmp_path):
     n = len(np.load(full[-1])["ids"])  # longest session
     with pytest.raises(ValueError, match="truncated"):
         bench_kv.build_refs(m, tok, traces, tmp_path / "refs", cap=n - 2)
+
+
+def test_sweep_stops_before_longer_sessions_when_peak_too_high(tok, traces, tmp_path, monkeypatch):
+    # sessions run shortest first, so a memory blow-up on a short one must stop the run
+    # before the longer ones (an 8-bit row at 78k context once hung the machine)
+    m = mlx_only_model(head_dim=64)
+    refs = bench_kv.build_refs(m, tok, traces, tmp_path / "refs", cap=4096)
+    out = tmp_path / "kv.json"
+    monkeypatch.setattr(bench_kv, "PEAK_ABORT_GB", 1e-6)
+    with pytest.raises(SystemExit, match="peak"):
+        bench_kv.sweep(m, "resident", (8,), refs, out, decode_n=4)
+    assert list(json.loads(out.read_text())["rows"]) == ["resident/8/short"]  # recorded, then stopped

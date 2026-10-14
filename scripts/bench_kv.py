@@ -25,6 +25,9 @@ OUT = Path("results/kv.json")
 CAP = 131072  # above the longest captured session (~78k); build_ref's default would truncate
 BUDGET_GB = 12.0  # 75% of 16 GB: stand-in for a 16 GB Mac's recommended working set
 MIN_TOP1, MAX_KL = 0.98, 0.02
+# Plain cache peaks at 14.6 GB at 82k tokens. A row above this means the attention path is
+# allocating something it shouldn't; stop before the longer sessions (sessions run shortest first).
+PEAK_ABORT_GB = 16.0
 
 
 def build_refs(model, tok, traces, refs_dir, cap=CAP):
@@ -102,6 +105,9 @@ def sweep(model, target, settings, refs, out=OUT, decode_n=64):
             tmp.write_text(json.dumps(res, indent=1))
             tmp.replace(out)  # atomic: an interrupt never leaves a half-written file
             print(key, {k: round(v, 4) if isinstance(v, float) else v for k, v in row.items()}, flush=True)
+            peak = max(row["peak_mem_gb"], row.get("decode_peak_gpu_gb", 0))
+            if peak > PEAK_ABORT_GB:
+                raise SystemExit(f"{key}: peak {peak:.2f} GB > {PEAK_ABORT_GB} GB; stopping before longer sessions")
     return res
 
 
