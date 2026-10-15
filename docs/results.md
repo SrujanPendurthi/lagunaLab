@@ -344,6 +344,29 @@ expert ≈ 57 MB per layer). That is a hypothesis, not a measurement.
 **Recommendation:** do 1, then 2 if the slot-write cost shows up. They're one
 small job. Hold 3 until after 2. Size 4 from 1's warm/cold comparison.
 
+**Option 1 result (partial).** Source: `results/stream_profile.log`, last two
+rows (`write_ms`). The JSON wasn't written: the run was stopped by hand during
+its third row, the pre-read 32k row, because the machine was starving the
+user's other apps (footprint ~17 GB, swap rising).
+
+| Context | Step | Sync | Load (CPU side) | Slot writes (GPU) | Other |
+|---|---|---|---|---|---|
+| 256 | 61.6 | 30.3 | 15.2 | **11.7** | 4.4 |
+| 32,768 | 181.4 | 80.8 | 66.9 | **27.7** | 6.0 |
+
+- **Slot writes are a real cost.** They're about 37% of the streaming overhead
+  at 256 context and about 22% at 32k. Forcing them to finish adds a wait per
+  layer, so steps here run a little slower than the unforced baseline (54.9 and
+  169.9 ms).
+- **Option 2 (batched writes) is worth running;** best case it saves about
+  these amounts.
+- **Option 4 is still unsized,** because the pre-read row was lost.
+- **Changes for the rerun:**
+  - the script now saves after every row;
+  - the wired limit is set only for `--resident`;
+  - MLX's buffer cache is cleared before each row;
+  - the watchdog footprint cap is 14 GB.
+
 ## Open items
 
 - **S5 follow-up: no fix picked yet.** See "Fix options" above; recommendation

@@ -84,6 +84,7 @@ def warm(pack):
 
 def profile(model, ids, n=32, chunk=2048, split=False, warm_pack=None):
     """Prefill `ids`, then time n greedy decode steps. Returns per-step ms."""
+    mx.clear_cache()  # drop buffers the previous row left in MLX's free pool
     cache = model.make_cache()
     for a in range(0, len(ids), chunk):
         h = model.model(mx.array(ids[None, a : a + chunk]), cache=cache)
@@ -126,18 +127,21 @@ def main():
     p.add_argument("--split", action="store_true")
     p.add_argument("--ab", action="store_true")
     a = p.parse_args()
-    mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
+    if a.resident:  # streaming fits without it; a max wired limit starves the rest of the machine
+        mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     ids = np.load(SESSION)["ids"]
     res = json.loads(OUT.read_text()) if OUT.exists() else {}
+    save = lambda: OUT.write_text(json.dumps(res, indent=1))  # after every row: a kill keeps finished rows
     if a.ab:
         res["ab"] = {}
         for batched in (False, True):
             streaming.ExpertStore.batch_writes = batched
             model = streaming.load_streaming(PACK, 32)[0]
-            rows = [profile(model, ids[:ctx]) for ctx in (256, 32768)]
-            for r in rows:
-                _show(r)
-            res["ab"]["batched" if batched else "per_expert"] = rows
+            rows = res["ab"]["batched" if batched else "per_expert"] = []
+            for ctx in (256, 32768):
+                rows.append(profile(model, ids[:ctx]))
+                _show(rows[-1])
+                save()
             del model
             gc.collect()
             mx.clear_cache()  # one model at a time
@@ -148,17 +152,17 @@ def main():
         model = load(MODEL)[0] if a.resident else streaming.load_streaming(PACK, 32)[0]
         runs = [(256, None), (32768, None)] + ([(32768, PACK)] if a.split else [])
         rows = []
-        for ctx, w in runs:
-            rows.append(profile(model, ids[:ctx], split=a.split, warm_pack=w))
-            _show(rows[-1])
         if a.resident:
             res["resident"] = {"model": MODEL, "rows": rows}
         elif a.split:
             res["split"] = {"pack": PACK, "slots": 32, "rows": rows}
         else:
             res.update(pack=PACK, slots=32, rows=rows)
-    OUT.write_text(json.dumps(res, indent=1))
-
+        for ctx, w in runs:
+            rows.append(profile(model, ids[:ctx], split=a.split, warm_pack=w))
+            _show(rows[-1])
+            save()
+    save()
 
 if __name__ == "__main__":
     main()
