@@ -75,3 +75,10 @@ def test_sweep_stops_before_longer_sessions_when_peak_too_high(tok, traces, tmp_
     with pytest.raises(SystemExit, match="peak"):  # a resume must not skip past the recorded blow-up
         bench_kv.sweep(m, "resident", (8,), refs, out, decode_n=4)
     assert list(json.loads(out.read_text())["rows"]) == ["resident/8/short"]
+
+
+def test_streaming_label_keeps_old_rows_and_separates_new_configs():
+    # the original run (32 slots, uncapped) keeps its key; other configs get their own rows
+    assert bench_kv.streaming_label(32, None) == "streaming"
+    assert bench_kv.streaming_label(64, 1.0) == "streaming-64slots-cap1.0gb"
+    assert bench_kv.streaming_label(32, 1.0) == "streaming-32slots-cap1.0gb"

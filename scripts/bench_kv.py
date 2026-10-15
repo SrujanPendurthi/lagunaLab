@@ -2,6 +2,7 @@
 
 python3 -m scripts.bench_kv                    # resident: plain, 8-bit, 4-bit on 5 django sessions
 python3 -m scripts.bench_kv --target streaming # step 0 only: plain cache, longest session
+python3 -m scripts.bench_kv --target streaming --slots 64 --cache-limit-gb 1.0   # own rows
 Resumable: finished rows in results/kv.json are skipped.
 """
 import argparse
@@ -113,6 +114,13 @@ def sweep(model, target, settings, refs, out=OUT, decode_n=64):
     return res
 
 
+def streaming_label(slots, cache_limit_gb):
+    """Row key prefix: the original run (32 slots, uncapped MLX pool) keeps "streaming"."""
+    if slots == 32 and cache_limit_gb is None:
+        return "streaming"
+    return f"streaming-{slots}slots" + (f"-cap{cache_limit_gb}gb" if cache_limit_gb else "")
+
+
 def main():
     from mlx_lm import load
 
@@ -121,6 +129,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--target", choices=["resident", "streaming"], default="resident")
     p.add_argument("--slots", type=int, default=32)
+    p.add_argument("--cache-limit-gb", type=float)
     a = p.parse_args()
     wire_resident(a.target == "resident")
     if a.target == "resident":
@@ -131,8 +140,8 @@ def main():
         refs = sorted(REFS.glob("*.npz"), key=lambda r: len(np.load(r)["ids"]))
         if not refs:
             raise SystemExit("run the resident target first: it builds refs/kv")
-        model, _ = load_streaming(PACK, a.slots)
-        res = sweep(model, "streaming", (None,), refs[-1:])
+        model, _ = load_streaming(PACK, a.slots, cache_limit_gb=a.cache_limit_gb)
+        res = sweep(model, streaming_label(a.slots, a.cache_limit_gb), (None,), refs[-1:])
     print(json.dumps(res["summary"], indent=1))
 
 
