@@ -529,8 +529,35 @@ Tokens were identical (`async_ab_tokens_identical: true`).
 - **Ruled out by measurement:**
   - candidate A (removed);
   - batched writes.
-- **Left:** B (`mx.compile`) is the only remaining candidate, at medium risk.
-  The 22 ms gap to resident at 128 slots is its ceiling.
+- **Left:** B (`mx.compile`) was the only remaining candidate, at medium
+  risk. The 22 ms gap to resident at 128 slots is its ceiling.
+
+**B, assessed off-GPU: not worth building, not run.** Between two syncs, the
+work is layer L's experts, residual, layer L+1's norm, attention and router.
+
+- **The attention part can't be compiled without a retrace every token.**
+  mlx-lm's `KVCache.update_and_fetch` writes and slices with Python-int
+  offsets (`keys[..., prev:offset, :]`), so each token's graph has different
+  constants. `RotatingKVCache` on the sliding layers works the same way. A
+  shapeless compile doesn't remove that, because the offsets are graph
+  constants, not input shapes.
+- **The fixed-shape part is too small to matter.** The decode expert call has
+  fixed shapes at any miss count: `x` [1,1,H], slot indices [1,1,8], slot
+  weights [slots,…]. It could compile once, with the slot weights passed as
+  `inputs=` so slot writes are seen. But it is 3 `gather_qmm` kernels, which
+  compile can't fuse, plus SwiGLU. mlx-lm already compiles SwiGLU
+  (`activations.swiglu`, `mx.compile(shapeless=True)`).
+  - Compiling it saves no kernel launches, only Python dispatch for about 5 ops
+    per layer.
+  - That's on the order of the 0.38 ms/token measured for all host
+    bookkeeping, against the 22 ms gap.
+- **The rest of the floor is out of compile's reach.** It is per-sync GPU idle
+  time and Metal commit latency, 39 times per token.
+
+**Conclusion:** the sync floor is structural to per-layer host routing. The
+next real lever would remove syncs altogether: routing on the GPU with a
+device-side expert table and on-GPU miss handling. That is a redesign of the
+streaming loader, not a tweak.
 
 ## Open items
 

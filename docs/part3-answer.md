@@ -110,8 +110,8 @@ with `--slots 64`; its default is unchanged.
 - **32 slots with the cap, at 82k.** It would trade speed for about 2 GB more
   headroom. The capped 32k profile suggests about 12 tok/s against 13.9 at
   64 slots.
-- **`mx.compile` for the attention and router blocks,** the last untried
-  candidate for the sync floor.
+- **Lowering the sync floor further** would need a redesign that routes on the
+  GPU. `mx.compile` was assessed and ruled out (results.md, "The sync floor").
 - **The serving path end to end** with the cap and 64 slots: a `pool` agent
   session through `serve_streaming`.
 - **Speed variance.** Each row is a single run, and some ran alongside video
