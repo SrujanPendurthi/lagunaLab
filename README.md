@@ -16,19 +16,21 @@ mlx-lm 0.31.3, Python 3.13). Every number in these docs comes from a file in
 | Pruned 50% of experts (REAP), resident | 9.8 GB | 10.1 GB | 38.7 tok/s | top-1 0.945, KL 0.081 vs. full model |
 | Pruned, SSD-streamed (32 expert slots/layer) | 9.8 GB | 3.97 GB | 12.8 tok/s | identical to pruned resident |
 | Pruned, streamed, **82,671-token session** | 9.8 GB | **8.04 GB** | 4.7 tok/s | identical (top-1 1.0, KL 0) |
+| Pruned, streamed, 64 slots, 1 GB MLX pool cap, **82,671-token session** | 9.8 GB | **10.16 GB** | **6.9 tok/s** | identical (top-1 1.0, KL 0) |
 
 Sources: `results/prune_point.json` (short prompts), `results/kv.json` (82k session).
 
-The streaming speeds in this table were measured before the MLX buffer-pool
-cap. With `load_streaming(..., cache_limit_gb=1.0)`, the 32k-context streaming
+The two 32-slot streaming rows were measured before the MLX buffer-pool cap. With `load_streaming(..., cache_limit_gb=1.0)`, the 32k-context streaming
 decode step halved (169.9 to 84.7 ms; `results/stream_profile.json`, S5 in
 [docs/results.md](docs/results.md)). The memory and quality numbers stand.
 
-**The 16 GB answer:** the pruned model, streamed from SSD, runs the longest
-captured agent session (82,671 tokens) at 8.04 GB peak, under the 12 GB budget
-assumed for a 16 GB Mac, with no KV-cache compression needed. KV quantization
-works for quality (4-bit: top-1 0.994, KL 0.004) but the resident pruned model
-still peaks at 12.29 GB, just over that budget.
+**The 16 GB answer:** the pruned model, streamed from SSD with 64 expert slots
+per layer and MLX's buffer pool capped at 1 GB. It runs the longest captured
+agent session (82,671 tokens) at 10.16 GB peak, under the 12 GB budget assumed
+for a 16 GB Mac. It decodes at 6.9 tok/s, 93% of the resident pruned model, and
+its output is identical. KV quantization works for quality (4-bit: top-1 0.994,
+KL 0.004), but the resident pruned model still peaks at 12.29 GB, just over
+budget. Details and open questions: [docs/part3-answer.md](docs/part3-answer.md).
 
 See [docs/results.md](docs/results.md) for the full findings, including the
 negative ones (DFlash and prompt-lookup speculative decoding).
@@ -86,6 +88,7 @@ model, tok = load_streaming("models/Laguna-XS-2.1-pruned-50-packed", slots=32)
 - [docs/architecture.md](docs/architecture.md): how the port, streaming, pruning,
   caches and the replay metric work, and why they are built that way.
 - [docs/results.md](docs/results.md): all findings for Parts 1–3, with sources.
+- [docs/part3-answer.md](docs/part3-answer.md): the 16 GB recommendation and what is unmeasured.
 - [docs/runbook.md](docs/runbook.md): reproducing everything, machine-safety rules,
   and known gotchas.
 - `docs/superpowers/specs/` and `docs/superpowers/plans/`: the original design

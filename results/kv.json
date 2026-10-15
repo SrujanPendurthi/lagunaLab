@@ -171,6 +171,19 @@
    "kv_gb": 3.38690048,
    "decode_tok_s": 4.691675273022617,
    "decode_peak_gpu_gb": 7.940324534
+  },
+  "streaming-64slots-cap1.0gb/plain/django__django-11039": {
+   "tokens": 82671,
+   "assistant_tokens": 44204,
+   "truncated": false,
+   "kl_top64_mean": 0.0,
+   "kl_top64_p99": 0.0,
+   "top1_agree": 1.0,
+   "peak_mem_gb": 10.16455077,
+   "tok_per_s": 70.99136242539153,
+   "kv_gb": 3.38690048,
+   "decode_tok_s": 6.871853501418973,
+   "decode_peak_gpu_gb": 10.06198693
   }
  },
  "budget_gb": 12.0,
@@ -213,6 +226,19 @@
    "longest_tokens": 82671,
    "fits": false,
    "passes": false
+  },
+  "streaming-64slots-cap1.0gb/plain": {
+   "sessions": 1,
+   "kl_mean": 0.0,
+   "kl_p99_max": 0.0,
+   "top1": 1.0,
+   "prefill_tok_s": 70.99136242539153,
+   "peak_gpu_gb": 10.16455077,
+   "kv_gb": 3.38690048,
+   "decode_tok_s": 6.871853501418973,
+   "longest_tokens": 82671,
+   "fits": true,
+   "passes": true
   },
   "streaming/plain": {
    "sessions": 1,

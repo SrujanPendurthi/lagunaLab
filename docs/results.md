@@ -257,7 +257,8 @@ from `mx.get_peak_memory`, which doesn't count the pool, still stand.
 | Resident, plain | 14.60 | 3.39 | 1.0 | 0 | 0 | 95.8 | 7.42 | fail: budget |
 | Resident, 8-bit | 13.16 | 1.80 | 0.9963 | 0.0020 | 0.050 | 109.5 | 4.10 | fail: budget |
 | Resident, 4-bit | 12.29 | 0.95 | 0.9944 | 0.0038 | 0.120 | 114.5 | 4.99 | fail: budget (+0.29 GB) |
-| **Streaming, plain** | **8.04** | 3.39 | 1.0 | 0 | 0 | 69.6 | 4.69 | **pass** |
+| Streaming, plain (32 slots, uncapped pool) | 8.04 | 3.39 | 1.0 | 0 | 0 | 69.6 | 4.69 | pass |
+| **Streaming, plain, 64 slots, 1 GB pool cap** | **10.16** | 3.39 | 1.0 | 0 | 0 | 71.0 | **6.87** | **pass** |
 
 In this table, resident prefill is the mean over the 5 sessions. Streaming
 prefill is from the longest session only. On the longest session alone,
@@ -277,6 +278,11 @@ resident prefill was 92.6 (plain), 104.0 (8-bit) and 102.4 (4-bit) tok/s.
 **Decision (human, 2026-10-14):** pruned streaming with the plain cache is the
 16 GB answer. KV quantization stays in the codebase but is not the operating
 point.
+
+**Update (2026-10-15):** with the MLX pool capped at 1 GB, 64 slots fits at
+10.16 GB and decodes at 6.87 tok/s at 82k (row `streaming-64slots-cap1.0gb`).
+That's the recommended configuration. The full answer, with what remains
+unmeasured, is in [part3-answer.md](part3-answer.md).
 
 **Incident during this part:** mlx-lm's quantized attention path materialized
 full score matrices (about 16 GB per layer at 82k). The first 8-bit run hung
