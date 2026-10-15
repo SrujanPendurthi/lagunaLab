@@ -18,3 +18,12 @@ def test_profile_times_each_part_and_restores_streaming(tmp_path):
     assert r["misses_per_step"] > 0 and r["pread_ms"] > 0  # 3 slots < 8 experts: decode misses
     assert streaming.np is np  # patches undone
     assert streaming.ExpertStore.load is load and streaming.ExpertStore._read is read
+
+
+def test_profile_runs_on_a_resident_model():
+    # resident control: nothing streams, so sync and load stay zero and the step is pure compute
+    from tests.tiny import mlx_only_model
+
+    m = mlx_only_model()
+    r = profile(m, np.arange(20) % TINY["vocab_size"], n=3, chunk=8)
+    assert r["sync_ms"] == 0 and r["load_ms"] == 0 and r["misses_per_step"] == 0 and r["step_ms"] > 0

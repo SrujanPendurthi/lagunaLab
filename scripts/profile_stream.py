@@ -1,6 +1,7 @@
 """Where streaming decode time goes (Task S5): per decode step, summed over the MoE layers.
 
-python3 -m scripts.profile_stream   # pruned-50 pack, slots=32, at short and 32k context
+python3 -m scripts.profile_stream              # pruned-50 pack, slots=32, at short and 32k context
+python3 -m scripts.profile_stream --resident   # same, pruned-50 fully resident: no sync, no loads
 
   sync_ms   time blocked in np.array(indices): the GPU finishing everything queued
             since the last layer (attention + previous layers' compute) plus the round-trip
@@ -20,6 +21,7 @@ import laguna_mlx  # noqa: F401
 from laguna_mlx import streaming
 
 PACK = "models/Laguna-XS-2.1-pruned-50-packed"
+MODEL = "models/Laguna-XS-2.1-pruned-50"
 SESSION = Path("refs/kv/django__django-11039.npz")  # longest captured session (82,671 tokens)
 OUT = Path("results/stream_profile.json")
 
@@ -90,15 +92,27 @@ def profile(model, ids, n=32, chunk=2048):
 
 
 def main():
+    import argparse
+
+    from mlx_lm import load
+
+    p = argparse.ArgumentParser()
+    p.add_argument("--resident", action="store_true")
+    a = p.parse_args()
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
-    model, _ = streaming.load_streaming(PACK, 32)
+    model = load(MODEL)[0] if a.resident else streaming.load_streaming(PACK, 32)[0]
     ids = np.load(SESSION)["ids"]
     rows = []
     for ctx in (256, 32768):
         r = profile(model, ids[:ctx])
         rows.append(r)
         print({k: round(v, 2) if isinstance(v, float) else v for k, v in r.items()}, flush=True)
-    OUT.write_text(json.dumps({"pack": PACK, "slots": 32, "rows": rows}, indent=1))
+    res = json.loads(OUT.read_text()) if OUT.exists() else {}
+    if a.resident:
+        res["resident"] = {"model": MODEL, "rows": rows}
+    else:
+        res.update(pack=PACK, slots=32, rows=rows)
+    OUT.write_text(json.dumps(res, indent=1))
 
 
 if __name__ == "__main__":
