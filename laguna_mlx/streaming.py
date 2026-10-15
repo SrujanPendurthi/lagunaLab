@@ -23,9 +23,6 @@ _POOL = ThreadPoolExecutor(8)
 class ExpertStore:
     """Slots for one layer: a quantized SwitchGLU with `slots` experts, refilled from disk."""
 
-    # ponytail: A/B switch for Task S5 (one scatter per tensor vs one per expert); drop the loser once measured
-    batch_writes = False
-
     def __init__(self, pack_dir, layout, layer, slots, group_size, bits, hidden, inter):
         self.layout, self.slots = layout, slots
         self.fd = os.open(Path(pack_dir) / "experts" / f"layer_{layer:02d}.bin", os.O_RDONLY)
@@ -73,11 +70,8 @@ class ExpertStore:
             for name in parts[0]:
                 proj, part = name.split(".")
                 param = getattr(getattr(self.glu, proj), part)
-                if self.batch_writes:
-                    param[mx.array(slots)] = mx.stack([p[name] for p in parts])
-                else:
-                    for slot, p in zip(slots, parts):
-                        param[slot] = p[name]
+                for slot, p in zip(slots, parts):  # one scatter per tensor measured no faster (S5 --ab)
+                    param[slot] = p[name]
         return {e: self.expert_slot[e] for e in experts}
 
 

@@ -3,7 +3,6 @@
 python3 -m scripts.profile_stream              # pruned-50 pack, slots=32, at short and 32k context
 python3 -m scripts.profile_stream --resident   # same, pruned-50 fully resident: no sync, no loads
 python3 -m scripts.profile_stream --split      # force slot writes to finish inside load (write_ms); adds 32k with pre-read expert files
-python3 -m scripts.profile_stream --ab         # per-expert vs batched slot writes, fresh model each, tokens must match
 
   sync_ms   time blocked in np.array(indices): the GPU finishing everything queued
             since the last layer (attention + previous layers' compute) plus the round-trip
@@ -121,14 +120,12 @@ def _show(r):
 
 def main():
     import argparse
-    import gc
 
     from mlx_lm import load
 
     p = argparse.ArgumentParser()
     p.add_argument("--resident", action="store_true")
     p.add_argument("--split", action="store_true")
-    p.add_argument("--ab", action="store_true")
     a = p.parse_args()
     if a.resident:  # streaming fits without it; a max wired limit starves the rest of the machine
         mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
@@ -137,37 +134,20 @@ def main():
     ids = np.load(SESSION)["ids"]
     res = json.loads(OUT.read_text()) if OUT.exists() else {}
     save = lambda: OUT.write_text(json.dumps(res, indent=1))  # after every row: a kill keeps finished rows
-    if a.ab:
-        res["ab"] = {}
-        for batched in (False, True):
-            streaming.ExpertStore.batch_writes = batched
-            model = streaming.load_streaming(PACK, 32)[0]
-            rows = res["ab"]["batched" if batched else "per_expert"] = []
-            for ctx in (256, 32768):
-                rows.append(profile(model, ids[:ctx]))
-                _show(rows[-1])
-                save()
-            del model
-            gc.collect()
-            mx.clear_cache()  # one model at a time
-        res["ab"]["tokens_identical"] = all(
-            x["tokens"] == y["tokens"] for x, y in zip(res["ab"]["per_expert"], res["ab"]["batched"]))
-        print("tokens identical:", res["ab"]["tokens_identical"], flush=True)
+    model = load(MODEL)[0] if a.resident else streaming.load_streaming(PACK, 32)[0]
+    runs = [(256, None), (32768, None)] + ([(32768, PACK)] if a.split else [])
+    rows = []
+    if a.resident:
+        res["resident"] = {"model": MODEL, "rows": rows}
+    elif a.split:
+        res["split"] = {"pack": PACK, "slots": 32, "rows": rows}
     else:
-        model = load(MODEL)[0] if a.resident else streaming.load_streaming(PACK, 32)[0]
-        runs = [(256, None), (32768, None)] + ([(32768, PACK)] if a.split else [])
-        rows = []
-        if a.resident:
-            res["resident"] = {"model": MODEL, "rows": rows}
-        elif a.split:
-            res["split"] = {"pack": PACK, "slots": 32, "rows": rows}
-        else:
-            res.update(pack=PACK, slots=32, rows=rows)
-        for ctx, w in runs:
-            rows.append(profile(model, ids[:ctx], split=a.split, warm_pack=w))
-            _show(rows[-1])
-            save()
-    save()
+        res.update(pack=PACK, slots=32, rows=rows)
+    for ctx, w in runs:
+        rows.append(profile(model, ids[:ctx], split=a.split, warm_pack=w))
+        _show(rows[-1])
+        save()
+
 
 if __name__ == "__main__":
     main()

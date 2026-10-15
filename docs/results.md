@@ -382,10 +382,43 @@ user's other apps (footprint ~17 GB, swap rising).
   - streaming runs now cap the pool at 1 GB (`mx.set_cache_limit`);
   - each row records `peak_gb` and `cache_after_prefill_gb`.
 
+**Option 2 rerun: batching doesn't help; capping the buffer pool does.**
+Source: `results/stream_profile.json` → `ab`. Fresh model per mode, one at a
+time, 1 GB pool cap, two YouTube tabs playing throughout.
+
+| Context | Writes | Step | Sync | Load | pread (thread-summed) | Peak GB |
+|---|---|---|---|---|---|---|
+| 256 | per expert | 55.5 | 37.0 | 14.2 | 19.5 | 4.04 |
+| 256 | batched | 72.4 | 48.9 | 17.8 | 23.3 | 4.16 |
+| 32,768 | per expert | **84.7** | 64.9 | 15.5 | 22.5 | 5.91 |
+| 32,768 | batched | 92.5 | 71.4 | 16.3 | 23.2 | 5.87 |
+
+Generated tokens were identical between the two modes (`tokens_identical:
+true`).
+
+- **Batched writes aren't faster:** slower in both rows, though video playback
+  adds noise. The batched path was removed and the per-expert writes stay.
+- **The 1 GB pool cap alone halved the 32k step:**
+  - step 169.9 to 84.7 ms (5.9 to 11.8 tok/s), against the uncapped profile
+    above;
+  - load 65.4 to 15.5 ms per step;
+  - thread-summed pread 154.4 to 22.5 ms.
+  The 256 row barely moved (54.9 to 55.5). So the long-context slowdown
+  (option 4) was mostly the uncapped MLX pool squeezing the expert files out of
+  the page cache, not context itself. Per-step load at 32k is now about the
+  same as at 256.
+- **What's left at 32k** is mostly sync (64.9 ms): GPU compute plus the
+  per-layer round-trip. The resident model takes 46.8 ms per step here.
+- **Not done yet:** the cap is set only in `profile_stream`. `load_streaming`,
+  `serve_streaming` and the benchmarks still run uncapped. Applying it there is
+  the obvious next step, and it changes a stable interface that moeStream uses.
+
 ## Open items
 
-- **S5 follow-up: no fix picked yet.** See "Fix options" above; recommendation
-  is to measure first (option 1), then batch slot writes (option 2).
+- **S5 follow-up: apply the 1 GB MLX pool cap to streaming generally.** It
+  doubled 32k decode in the profile. Batched slot writes were measured and
+  dropped. This touches `load_streaming`, which moeStream uses, so it needs a
+  decision.
 - **Task 11: mlx-lm upstream PR** adding Laguna. Not filed; it is
   outward-facing, so it needs a human go-ahead.
 - **Prompt lookup:** keep/drop decision not recorded (see above).
