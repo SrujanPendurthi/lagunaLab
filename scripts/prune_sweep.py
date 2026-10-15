@@ -66,7 +66,7 @@ def refs(model, tok, cap):
         out = REFS / f"{Path(f).stem}.npz"
         if not out.exists():
             t0 = time.perf_counter()
-            build_ref(model, tok, f, out, max_tokens=cap, n_actions=0)
+            build_ref(model, tok, f, out, max_tokens=cap, n_actions=0, model_id=MODEL)
             print(f"ref {out.name} in {time.perf_counter() - t0:.0f}s", flush=True)
 
 

@@ -40,7 +40,7 @@ def build_refs(model, tok, traces, refs_dir, cap=CAP):
     for f in traces:
         r = refs_dir / f"{Path(f).stem}.npz"
         if not r.exists():
-            build_ref(model, tok, f, r, max_tokens=cap, n_actions=0)
+            build_ref(model, tok, f, r, max_tokens=cap, n_actions=0, model_id=MODEL)
             print("ref", r.stem, flush=True)
         if bool(np.load(r)["truncated"]):
             r.unlink()

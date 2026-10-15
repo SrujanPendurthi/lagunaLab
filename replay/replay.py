@@ -66,7 +66,8 @@ _greedy_actions = greedy_actions  # old name; scripts and other repos may import
 
 
 def build_ref(model, tokenizer, session_path, out_path, max_tokens=65536, n_actions=2,
-              max_new=1024, chunk=2048, seed=0):
+              max_new=1024, chunk=2048, seed=0, model_id=None):
+    """`model_id` (e.g. the model's path) is stored as `model`; refs built before it have none."""
     msgs, tools = load_session(session_path)
     ids, mask, truncated = tokenize(tokenizer, msgs, tools, max_tokens)
     pos, top_ids, top_lp = [], [], []
@@ -86,7 +87,7 @@ def build_ref(model, tokenizer, session_path, out_path, max_tokens=65536, n_acti
     np.savez_compressed(out_path, ids=ids, mask=mask, truncated=truncated,
                         pos=np.concatenate(pos), top_ids=np.concatenate(top_ids),
                         top_lp=np.concatenate(top_lp), action_starts=starts,
-                        actions=json.dumps(actions), max_new=max_new)
+                        actions=json.dumps(actions), max_new=max_new, model=model_id or "")
 
 
 def score(model, ref_path, chunk=2048, make_cache=None, forward=None):
@@ -109,7 +110,8 @@ def score(model, ref_path, chunk=2048, make_cache=None, forward=None):
     return {"tokens": int(len(ids)), "assistant_tokens": int(len(kl)),
             "truncated": bool(ref["truncated"]), "kl_top64_mean": float(kl.mean()),
             "kl_top64_p99": float(np.percentile(kl, 99)), "top1_agree": float(ag.mean()),
-            "peak_mem_gb": mx.get_peak_memory() / 1e9, "tok_per_s": len(ids) / dt}
+            "peak_mem_gb": mx.get_peak_memory() / 1e9, "tok_per_s": len(ids) / dt,
+            "ref_model": (str(ref["model"]) or None) if "model" in ref.files else None}
 
 
 def score_actions(model, tokenizer, ref_path, max_new=None):
@@ -142,7 +144,7 @@ def main():
         for f in sorted(Path(a.traces).glob("*.jsonl")):
             out = refs / f"{f.stem}.npz"
             if not out.exists():
-                build_ref(model, tok, f, out, a.max_tokens)
+                build_ref(model, tok, f, out, a.max_tokens, model_id=a.model)
                 print("ref", f.stem, flush=True)
         return
     rows = []

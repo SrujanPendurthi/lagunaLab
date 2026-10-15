@@ -61,7 +61,7 @@ def main():
     for f in HELDOUT:
         r = AREFS / f"{Path(f).stem}.npz"
         if not r.exists():
-            build_ref(base, tok, f, r, max_tokens=a.cap, n_actions=a.actions)
+            build_ref(base, tok, f, r, max_tokens=a.cap, n_actions=a.actions, model_id=BASE)
     res["base"] = decode_bench(base, tok)
     res["base"]["disk_gb"] = du_gb(BASE)
     del base

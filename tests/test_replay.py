@@ -87,3 +87,14 @@ def test_score_with_forward_callable(tok, session, tmp_path):
 
     s = score(None, ref, forward=fwd, make_cache=m.make_cache)
     assert calls and s["top1_agree"] == 1.0 and abs(s["kl_top64_mean"]) < 1e-5
+
+
+def test_ref_records_its_model_and_old_refs_still_score(tok, session, tmp_path):
+    m = mlx_model(torch_model())
+    ref = tmp_path / "s.npz"
+    build_ref(m, tok, session, ref, n_actions=0, model_id="models/x")
+    assert str(np.load(ref)["model"]) == "models/x" and score(m, ref)["ref_model"] == "models/x"
+    old = tmp_path / "old.npz"  # written before the field existed
+    np.savez_compressed(old, **{k: v for k, v in np.load(ref).items() if k != "model"})
+    s = score(m, old)
+    assert s["ref_model"] is None and s["top1_agree"] == 1.0
