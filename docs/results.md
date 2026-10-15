@@ -436,8 +436,47 @@ true`).
 - **Follow-up done (9c35d6e):** `load_streaming(..., cache_limit_gb=None)` is
   an opt-in cap. `serve_streaming` and `profile_stream` pass 1.0.
 
+### Capped slot sweep
+
+Source: `results/stream_profile.json` → `sweep_capped`. Pruned-50 pack, 1 GB
+pool cap, a fresh model per slot count, 32 decode steps. The pruned model has
+128 experts per layer, so 128 slots holds every expert. Two YouTube tabs may
+have been playing.
+
+| Slots | Context | Step ms | tok/s | Sync | Load | Misses/step | Hit rate | Peak GB |
+|---|---|---|---|---|---|---|---|---|
+| 16 | 256 | 68.6 | 14.6 | 43.3 | 20.5 | 128.3 | 0.59 | 2.76 |
+| 32 | 256 | 58.7 | 17.0 | 38.7 | 15.2 | 84.3 | 0.73 | 4.04 |
+| 64 | 256 | 50.8 | 19.7 | 37.7 | 8.5 | 41.6 | 0.87 | 7.09 |
+| 128 | 256 | 78.6 | 12.7 | 67.6 | 3.4 | 1.8 | 0.99 | 12.82 |
+| 16 | 32,768 | 97.5 | 10.3 | 67.0 | 25.6 | 165.3 | 0.47 | 4.95 |
+| 32 | 32,768 | 83.5 | 12.0 | 64.2 | 15.0 | 94.6 | 0.70 | 5.91 |
+| 64 | 32,768 | 72.2 | 13.9 | 63.1 | 4.7 | 21.6 | 0.93 | 7.88 |
+| 128 | 32,768 | 68.9 | 14.5 | 64.7 | 0.2 | 0 | 1.0 | 12.22 |
+
+- **With the cap, more slots do help.** At 32k the step falls from 97.5 ms at
+  16 slots to 68.9 ms at 128, and load falls from 25.6 ms to almost nothing.
+  The old flat sweep was an artifact of the uncapped pool.
+- **What's left is the sync floor.** Sync stays at 63–65 ms at 32k whatever
+  the slot count. At 128 slots nothing is loaded, yet the step is still 22 ms
+  slower than the resident model (46.8 ms). That gap is the cost of the
+  per-layer host round-trip itself.
+- **The 128-slot row at 256 context is an outlier** (sync 67.6 ms). Not
+  investigated; the peak was 12.8 GB, the highest of the sweep, and video was
+  playing.
+- **64 slots is the sweet spot:**
+  - 13.9 tok/s at 32k, against 12.0 at 32 slots;
+  - 7.9 GB peak, against 5.9 GB at 32 slots;
+  - at 82k it would add about 2 GB of full-attention KV, so roughly 10 GB
+    peak. That's an estimate from 40,960 bytes/token, not measured. It would
+    still be under the 12 GB budget, but with less headroom than 32 slots.
+    Worth measuring before switching the 16 GB answer to 64 slots.
+
 ## Open items
 
+- **16 GB answer at 64 slots (capped):** measure `bench_kv --target streaming
+  --slots 64` with the pool cap, which needs `cache_limit_gb` passed in
+  bench_kv. That checks the ~10 GB peak estimate at 82k.
 - **S5 follow-up: the MLX pool cap is opt-in.**
   - `load_streaming(pack_dir, slots, cache_limit_gb=None)`. The default leaves
     MLX's limit alone, so moeStream's imports and past numbers are unchanged.
