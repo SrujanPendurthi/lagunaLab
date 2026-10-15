@@ -1,6 +1,7 @@
 """Why is greedy action match low? Noise floor (base vs its own refs) and where pruned diverges.
 
 python3 -m scripts.diag_actions --pruned models/Laguna-XS-2.1-pruned-50
+From another repo, pass --out (and --refs/--base as needed) so nothing is written here.
 """
 import argparse
 import json
@@ -23,10 +24,10 @@ def tool(a):
     return a[len("<tool_call>"):].split("<", 1)[0] if a.startswith("<tool_call>") else None
 
 
-def run(path):
+def run(path, refs=AREFS):
     model, tok = load(path)
     rows = []
-    for r in sorted(AREFS.glob("*.npz")):
+    for r in sorted(Path(refs).glob("*.npz")):
         ref = np.load(r)
         want = json.loads(str(ref["actions"]))
         got = greedy_actions(model, tok, ref["ids"], ref["action_starts"], int(ref["max_new"]))
@@ -41,16 +42,19 @@ def run(path):
             "same_tool": float(np.mean([x["same_tool"] for x in rows])), "rows": rows}
 
 
-def main():
+def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--pruned", required=True)
-    a = p.parse_args()
+    p.add_argument("--base", default=BASE, help="model that built --refs: the noise floor")
+    p.add_argument("--refs", default=str(AREFS))
+    p.add_argument("--out", default="results/action_diag.json")
+    a = p.parse_args(argv)
     wire_resident(True)
-    out = Path("results/action_diag.json")
+    out = Path(a.out)
     res = json.loads(out.read_text()) if out.exists() else {}
-    for name, path in (("base", BASE), ("pruned", a.pruned)):
+    for name, path in (("base", a.base), ("pruned", a.pruned)):
         if name not in res:
-            res[name] = run(path)
+            res[name] = run(path, a.refs)
             out.write_text(json.dumps(res, indent=1))
     print({k: (v["exact"], v["same_tool"]) for k, v in res.items()})
 
