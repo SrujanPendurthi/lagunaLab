@@ -37,6 +37,7 @@ class ExpertStore:
         self.freq, self.last = np.zeros(E, np.int64), np.zeros(E, np.int64)
         self.clock = 0
         self.hits = self.misses = self.bytes_read = 0
+        self.dropped = self.decode_picks = 0  # drop_misses simulation only
 
     def _read(self, e):
         s = self.layout["stride"]
@@ -76,14 +77,23 @@ class ExpertStore:
 
 
 class StreamingSwitchGLU(nn.Module):
-    def __init__(self, store):
+    # ponytail: stage-1 simulation of drop-on-miss (docs/gpu-side-routing.md), quality only: it still
+    # syncs and loads every layer, so its speed means nothing. Remove or replace with the real path.
+    drop_misses = False
+
+    def __init__(self, store, block=None):
         super().__init__()
         self._store = [store]  # list: keeps the store out of the parameter tree
+        self._block = [block]  # the SparseMoeBlock, for its gate weights when dropping
 
     def __call__(self, x, indices):
         store = self._store[0]
         idx = np.array(indices)
         experts = np.unique(idx).tolist()
+        if self.drop_misses and x.shape[-2] == 1:  # decode only: prefill stays exact
+            present = np.isin(idx, list(store.expert_slot))
+            store.dropped += int((~present).sum())
+            store.decode_picks += idx.size
         out = None
         # ponytail: a prefill chunk needing > slots experts runs several masked passes
         for g in range(0, len(experts), store.slots):
@@ -96,6 +106,12 @@ class StreamingSwitchGLU(nn.Module):
             if len(experts) > store.slots:
                 y = mx.where(mx.array(member[idx])[..., None], y, 0)
             out = y if out is None else out + y
+        if self.drop_misses and x.shape[-2] == 1:
+            # missing picks contribute zero; the block's gate weights renormalize over the present ones
+            w = self._block[0].route(x)[1].astype(mx.float32)
+            pm = mx.array(present, mx.float32)
+            kept = (w * pm).sum(axis=-1, keepdims=True)
+            out = out * (pm / mx.where(kept > 0, kept, 1.0))[..., None].astype(out.dtype)
         return out  # mx.async_eval(out) here measured 1.5x slower (S5 async_ab)
 
 
@@ -123,7 +139,7 @@ def load_streaming(pack_dir, slots, cache_limit_gb=None):
     for l in layout["layers"]:
         mlp = model.layers[l].mlp
         mlp.switch_mlp = StreamingSwitchGLU(ExpertStore(
-            pack_dir, layout, l, slots, q["group_size"], q["bits"], a.hidden_size, a.moe_intermediate_size))
+            pack_dir, layout, l, slots, q["group_size"], q["bits"], a.hidden_size, a.moe_intermediate_size), mlp)
     model.load_weights(str(pack_dir / "resident.safetensors"), strict=True)
     mx.eval(model.parameters())
     tok = load_tokenizer(pack_dir) if (pack_dir / "tokenizer.json").exists() else None
