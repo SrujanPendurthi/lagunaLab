@@ -110,3 +110,28 @@ def test_cache_limit_gb_is_opt_in(tmp_path):
         assert mx.set_cache_limit(123 << 20) == int(0.5 * (1 << 30))
     finally:
         mx.set_cache_limit(before)
+
+
+def test_async_dispatch_is_bit_exact(tmp_path, monkeypatch):
+    # starting the layer's expert compute early (mx.async_eval) must not change any bits
+    from laguna_mlx.streaming import StreamingSwitchGLU
+
+    d, _ = quantized_model_dir(tmp_path, dtype=mx.bfloat16)
+    out = tmp_path / "packed"
+    pack(d, out)
+    ids = _ids(16, seed=7)
+    calls = []
+    real = mx.async_eval
+    monkeypatch.setattr(mx, "async_eval", lambda *a: (calls.append(1), real(*a))[1])
+
+    def run(on):
+        monkeypatch.setattr(StreamingSwitchGLU, "async_dispatch", on)
+        streamed, _ = load_streaming(out, slots=3)
+        cache = streamed.make_cache()
+        got = [streamed(ids[:, :10], cache=cache)]
+        got += [streamed(ids[:, i : i + 1], cache=cache) for i in range(10, 16)]
+        return mx.concatenate(got, axis=1)
+
+    off = run(False)
+    assert not calls
+    assert mx.array_equal(run(True), off).item() and calls
