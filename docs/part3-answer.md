@@ -79,11 +79,9 @@ Source: `results/stream_profile.json`.
   slot count. Even with every expert resident (128 slots), the step is 22 ms
   slower than the resident model. That's the cost of 39 host round-trips per
   token. results.md ("The sync floor") lists the candidates.
-  - `StreamingSwitchGLU.async_dispatch` is the safest one: implemented, off by
-    default, bit-exact in tiny tests.
-  - Its real-weight A/B (`profile_stream --slots 64 --async-ab`) was queued
-    when this was written.
-- **Two measured dead ends:**
+- **Three measured dead ends:**
+  - starting each layer's expert compute early with `mx.async_eval` was about
+    1.5× slower, with identical tokens (`async_ab`);
   - batched slot writes were slower (`ab`);
   - prefetching the next layer's experts was about break-even in the sibling
     moeStream project, by its own numbers, not this repo's.
@@ -112,7 +110,8 @@ with `--slots 64`; its default is unchanged.
 - **32 slots with the cap, at 82k.** It would trade speed for about 2 GB more
   headroom. The capped 32k profile suggests about 12 tok/s against 13.9 at
   64 slots.
-- **The async-dispatch result** (queued).
+- **`mx.compile` for the attention and router blocks,** the last untried
+  candidate for the sync floor.
 - **The serving path end to end** with the cap and 64 slots: a `pool` agent
   session through `serve_streaming`.
 - **Speed variance.** Each row is a single run, and some ran alongside video

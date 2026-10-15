@@ -76,10 +76,6 @@ class ExpertStore:
 
 
 class StreamingSwitchGLU(nn.Module):
-    # ponytail: off until measured on real weights. Each layer's host sync leaves the GPU idle
-    # while Python builds the next layer's graph; async_eval starts the experts during that time.
-    async_dispatch = False
-
     def __init__(self, store):
         super().__init__()
         self._store = [store]  # list: keeps the store out of the parameter tree
@@ -100,9 +96,7 @@ class StreamingSwitchGLU(nn.Module):
             if len(experts) > store.slots:
                 y = mx.where(mx.array(member[idx])[..., None], y, 0)
             out = y if out is None else out + y
-        if self.async_dispatch:
-            mx.async_eval(out)
-        return out
+        return out  # mx.async_eval(out) here measured 1.5x slower (S5 async_ab)
 
 
 def load_streaming(pack_dir, slots, cache_limit_gb=None):

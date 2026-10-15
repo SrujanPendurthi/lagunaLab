@@ -509,9 +509,28 @@ Candidates:
 | D | Skip the sync entirely when slots = experts (static table) | Removes the floor, but needs 12.2 GB, more than the resident pruned model's 10.1 GB, which is faster anyway | Pointless |
 | E | Route one layer ahead (prefetch) | Break-even in moeStream's measurements | Already rejected |
 
-To measure A: `profile_stream --slots 64 --async-ab`. It runs with async off,
-then on, in one process, with a fresh model each. Results go to `async_ab`, and
-the token check to `async_ab_tokens_identical`.
+**A, measured: slower, and removed.** Source: `results/stream_profile.json` →
+`async_ab`. 64 slots, 1 GB pool cap, one process, with async off and then on,
+on a fresh model each.
+
+| Context | Async | Step ms | Sync | Load | Other |
+|---|---|---|---|---|---|
+| 256 | off | 46.8 | 34.5 | 8.2 | 4.0 |
+| 256 | on | 77.4 | 46.9 | 17.9 | 12.7 |
+| 32,768 | off | 68.7 | 59.8 | 4.7 | 4.2 |
+| 32,768 | on | 104.6 | 76.8 | 13.3 | 14.5 |
+
+Tokens were identical (`async_ab_tokens_identical: true`).
+
+- **Async is about 1.5× slower.** Every bucket grows, and "other" roughly
+  triples: each extra `async_eval` costs a command-buffer commit.
+- **Not checked:** whether load doubles because the GPU is still reading the
+  slot buffers that the next miss overwrites.
+- **Ruled out by measurement:**
+  - candidate A (removed);
+  - batched writes.
+- **Left:** B (`mx.compile`) is the only remaining candidate, at medium risk.
+  The 22 ms gap to resident at 128 slots is its ceiling.
 
 ## Open items
 
