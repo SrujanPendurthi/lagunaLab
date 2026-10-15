@@ -151,3 +151,22 @@ def test_drop_misses_zeroes_missing_experts_and_renormalizes(tmp_path, monkeypat
     np.testing.assert_allclose(np.array(got), np.array(want), atol=1e-5, rtol=1e-5)
     assert store.dropped == 1 and store.decode_picks == 2
     assert picked[1] in store.expert_slot  # the miss is still loaded for later tokens
+
+
+def test_prefill_leaves_no_pending_slot_writes(tmp_path):
+    # mlx-lm's prefill evals only the caches; nothing reads the last MoE layer's output, so its
+    # slot writes would stay pending and pile up across chunks (found by moeStream)
+    d, _ = quantized_model_dir(tmp_path)
+    out = tmp_path / "packed"
+    pack(d, out)
+    streamed, _ = load_streaming(out, slots=2)
+    cache = streamed.make_cache()
+    ids = _ids(64, seed=4)
+    for a in range(0, 64, 16):
+        streamed(ids[:, a : a + 16], cache=cache)
+        mx.eval([c.state for c in cache])
+    last = [l for l in streamed.layers if hasattr(l.mlp, "switch_mlp")][-1].mlp.switch_mlp._store[0].glu
+    mx.synchronize()
+    before = mx.get_active_memory()
+    mx.eval(last.parameters())
+    assert before - mx.get_active_memory() == 0

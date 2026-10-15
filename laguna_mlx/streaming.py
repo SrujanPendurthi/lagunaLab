@@ -106,6 +106,11 @@ class StreamingSwitchGLU(nn.Module):
             if len(experts) > store.slots:
                 y = mx.where(mx.array(member[idx])[..., None], y, 0)
             out = y if out is None else out + y
+        if x.shape[-2] > 1:
+            # a prefill caller may eval only the caches; then nothing reads the last layer's output and
+            # its slot writes would stay pending across chunks (found by moeStream). Decode's output is
+            # always read, and an async_eval per decode layer measured 1.5x slower, so prefill only.
+            mx.async_eval(store.glu.parameters())
         if self.drop_misses and x.shape[-2] == 1:
             # missing picks contribute zero; the block's gate weights renormalize over the present ones
             w = self._block[0].route(x)[1].astype(mx.float32)

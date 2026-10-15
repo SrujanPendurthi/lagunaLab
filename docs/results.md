@@ -559,6 +559,25 @@ next real lever would remove syncs altogether: routing on the GPU with a
 device-side expert table and on-GPU miss handling. That is a redesign of the
 streaming loader, not a tweak.
 
+### Pending slot writes during prefill (fixed)
+
+Found by moeStream and checked here on the tiny model. mlx-lm's prefill
+(`generate_step`, which `serve_streaming` uses) evaluates only the KV caches
+after each chunk. Nothing reads the last MoE layer's output. So that layer's
+slot writes, and the loaded expert arrays they reference, stayed pending and
+piled up chunk after chunk.
+
+- **Tiny model:** active memory grew with every chunk, and evaluating the last
+  layer's slot tensors freed 130,864 bytes. Real-weight size wasn't measured;
+  moeStream reports ~0.4 GB per chunk in its engine.
+- **Fix:** `StreamingSwitchGLU` now calls `mx.async_eval` on its slot tensors
+  after every multi-token call. Test:
+  `test_prefill_leaves_no_pending_slot_writes`, which failed before the fix.
+- **Decode is unchanged,** since its output is always read.
+- **This repo's benchmark numbers aren't affected.** `replay.score`,
+  `bench_kv`, `profile_stream` and `sim_drop` evaluate the hidden state after
+  every chunk. The serving path (`serve_streaming`) was the exposed one.
+
 ## Open items
 
 - **16 GB answer at 64 slots (capped):** measure `bench_kv --target streaming
