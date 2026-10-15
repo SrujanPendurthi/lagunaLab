@@ -13,7 +13,7 @@ import numpy as np
 import laguna_mlx  # noqa: F401
 from laguna_mlx import wire_resident
 from mlx_lm import load
-from replay.replay import _greedy_actions
+from replay.replay import greedy_actions
 
 BASE = "models/Laguna-XS-2.1-mlx-4bit"
 AREFS = Path("refs/prune_actions")
@@ -29,7 +29,7 @@ def run(path):
     for r in sorted(AREFS.glob("*.npz")):
         ref = np.load(r)
         want = json.loads(str(ref["actions"]))
-        got = _greedy_actions(model, tok, ref["ids"], ref["action_starts"], int(ref["max_new"]))
+        got = greedy_actions(model, tok, ref["ids"], ref["action_starts"], int(ref["max_new"]))
         for s, w, g in zip(ref["action_starts"].tolist(), want, got):
             rows.append({"session": r.stem, "start": s, "exact": w == g, "same_tool": tool(w) == tool(g),
                          "common_prefix": len(os.path.commonprefix([w, g])), "ref_len": len(w),

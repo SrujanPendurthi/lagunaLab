@@ -46,12 +46,16 @@ def _action(text):
     return text[i : j + len("</tool_call>")] if 0 <= i < j else text.strip()
 
 
-def _greedy_actions(model, tokenizer, ids, starts, max_new):
+def greedy_actions(model, tokenizer, ids, starts, max_new):
+    """Greedy action (tool call, else whole reply) at each assistant-turn start in `starts`."""
     from mlx_lm import generate
 
     # ponytail: re-prefills the whole prefix per turn; reuse a trimmed cache if this is too slow
     return [_action(generate(model, tokenizer, prompt=ids[:s].tolist(), max_tokens=max_new))
             for s in starts]
+
+
+_greedy_actions = greedy_actions  # old name; scripts and other repos may import it
 
 
 def build_ref(model, tokenizer, session_path, out_path, max_tokens=65536, n_actions=2,
@@ -71,7 +75,7 @@ def build_ref(model, tokenizer, session_path, out_path, max_tokens=65536, n_acti
     starts = np.nonzero(mask & ~np.r_[False, mask[:-1]])[0]
     rng = np.random.default_rng(seed)
     starts = np.sort(rng.choice(starts, min(n_actions, len(starts)), replace=False))
-    actions = _greedy_actions(model, tokenizer, ids, starts, max_new)
+    actions = greedy_actions(model, tokenizer, ids, starts, max_new)
     np.savez_compressed(out_path, ids=ids, mask=mask, truncated=truncated,
                         pos=np.concatenate(pos), top_ids=np.concatenate(top_ids),
                         top_lp=np.concatenate(top_lp), action_starts=starts,
@@ -106,7 +110,7 @@ def score_actions(model, tokenizer, ref_path, max_new=None):
     want = json.loads(str(ref["actions"]))
     if not want:
         return float("nan")
-    got = _greedy_actions(model, tokenizer, ref["ids"], ref["action_starts"],
+    got = greedy_actions(model, tokenizer, ref["ids"], ref["action_starts"],
                           max_new or int(ref["max_new"]))
     return float(np.mean([a == b for a, b in zip(got, want)]))
 

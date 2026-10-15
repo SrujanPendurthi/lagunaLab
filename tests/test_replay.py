@@ -66,3 +66,8 @@ def test_score_with_cache_factory(tok, session, tmp_path):
     assert explicit["kl_top64_mean"] == default["kl_top64_mean"] and explicit["top1_agree"] == 1.0
     q4 = score(m, ref, make_cache=lambda: make_quantized_cache(m, 4))
     assert q4["kl_top64_mean"] > abs(default["kl_top64_mean"]) + 1e-6  # the factory is really used
+
+
+def test_greedy_actions_is_public_and_keeps_old_name():
+    from replay import replay
+    assert replay.greedy_actions is replay._greedy_actions
