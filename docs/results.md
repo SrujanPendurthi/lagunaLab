@@ -472,6 +472,40 @@ have been playing.
     still be under the 12 GB budget, but with less headroom than 32 slots.
     Worth measuring before switching the 16 GB answer to 64 slots.
 
+### The sync floor (off-GPU analysis)
+
+At 32k the sync bucket stays at 63–65 ms whatever the slot count. At 128 slots
+(`sweep_capped`), nothing is loaded and the step is 68.9 ms, against 46.8 ms
+for the resident model. Those 22 ms (about 0.56 ms per MoE layer) are the most
+any change to the per-layer handoff can win back.
+
+Where those 0.56 ms per layer go, read from `StreamingSwitchGLU.__call__`:
+
+1. `np.array(indices)` blocks until the GPU has finished everything queued so
+   far: the attention and router for this layer.
+2. Host bookkeeping runs: `np.unique`, `ExpertStore.load`, building the slot
+   table.
+   - Measured on the CPU alone, with numpy only, as a 128-expert all-hit
+     replica of the code: **9.8 µs per layer, 0.38 ms per token.**
+   - It's negligible.
+3. Python builds the graph for the rest of this layer and the next layer's
+   attention and router, then reaches the next sync. **The GPU sits idle
+   through all of this,** since nothing is submitted until the next sync. On
+   top of that is Metal's per-commit latency.
+
+Candidates:
+
+| # | Change | Expected gain | Risk |
+|---|---|---|---|
+| A | **`mx.async_eval(out)` at the end of each streamed MoE layer**, so the expert compute runs while Python builds the next layer's graph | Part of the 22 ms: the graph-build time that overlaps. Not sizable off-GPU | Lowest. Same graph, same kernels; bit-exact in the tiny test. **Implemented, off by default:** `StreamingSwitchGLU.async_dispatch` |
+| B | `mx.compile` the attention and router blocks, so less Python graph building per layer | Same bucket as A, overlapping with it | Medium: compile has to handle mutable KV caches and shapes that change every step |
+| C | Remap expert to slot on the GPU, and sync only an "any miss" flag | ~0: the sync is a data dependency, not a cost of its size | Not worth it |
+| D | Skip the sync entirely when slots = experts (static table) | Removes the floor, but needs 12.2 GB, more than the resident pruned model's 10.1 GB, which is faster anyway | Pointless |
+| E | Route one layer ahead (prefetch) | Break-even in moeStream's measurements | Already rejected |
+
+To measure A: `profile_stream --slots 64 --async-dispatch`. It writes
+`sweep_capped_async`, to compare against the 64-slot rows of `sweep_capped`.
+
 ## Open items
 
 - **16 GB answer at 64 slots (capped):** measure `bench_kv --target streaming

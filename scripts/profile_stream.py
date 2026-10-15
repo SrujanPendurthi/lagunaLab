@@ -3,6 +3,7 @@
 python3 -m scripts.profile_stream              # pruned-50 pack, slots=32, at short and 32k context
 python3 -m scripts.profile_stream --resident   # same, pruned-50 fully resident: no sync, no loads
 python3 -m scripts.profile_stream --slots 16 32 64 128   # slot sweep, fresh model per count, 1 GB pool cap
+python3 -m scripts.profile_stream --slots 64 --async-dispatch   # same sweep row with async expert dispatch
 python3 -m scripts.profile_stream --split      # force slot writes to finish inside load (write_ms); adds 32k with pre-read expert files
 
   sync_ms   time blocked in np.array(indices): the GPU finishing everything queued
@@ -128,13 +129,15 @@ def main():
     p.add_argument("--resident", action="store_true")
     p.add_argument("--split", action="store_true")
     p.add_argument("--slots", type=int, nargs="+")
+    p.add_argument("--async-dispatch", action="store_true")
     a = p.parse_args()
     laguna_mlx.wire_resident(a.resident)
     ids = np.load(SESSION)["ids"]
     res = json.loads(OUT.read_text()) if OUT.exists() else {}
     save = lambda: OUT.write_text(json.dumps(res, indent=1))  # after every row: a kill keeps finished rows
+    streaming.StreamingSwitchGLU.async_dispatch = a.async_dispatch
     if a.slots:
-        rows = res["sweep_capped"] = []
+        rows = res["sweep_capped_async" if a.async_dispatch else "sweep_capped"] = []
         for n in a.slots:
             model = streaming.load_streaming(PACK, n, cache_limit_gb=1.0)[0]
             for ctx in (256, 32768):
