@@ -42,10 +42,10 @@ tokenize(tokenizer, messages, tools, max_tokens=None) -> (ids int32[n], mask boo
   Hugging Face tokenizer.
 - `mask[i]` is True when token `i` is an assistant token.
 
-### `replay.replay` (not yet listed in the rules; see "Interface changes")
+### `replay.replay` (stable, rule 11)
 
 ```python
-assistant_logprobs(model, ids, mask, chunk=2048, make_cache=None)
+assistant_logprobs(model, ids, mask, chunk=2048, make_cache=None, forward=None)
     -> yields (positions int[k], logprobs mx.array float32 [k, V])
 ```
 
@@ -55,14 +55,19 @@ assistant_logprobs(model, ids, mask, chunk=2048, make_cache=None)
   `make_cache or model.make_cache`.
 - Log-softmax runs over at most `SUB = 256` positions at a time, about 100 MB
   each.
-- **Engine contract:** `model.model(ids[None], cache=cache)` returns hidden
-  states `[1, L, H]`, and `model.lm_head(h)` returns logits. Any mlx-lm
-  `Model` fits, and so does `load_streaming`'s model. Another engine must
-  expose the same two calls (or see "Interface changes").
+- **Engine contract, default:** `model.model(ids[None], cache=cache)`
+  returns hidden states `[1, L, H]`, and `model.lm_head(h)` returns logits.
+  Any mlx-lm `Model` fits, and so does `load_streaming`'s model.
+- **Engine contract, other engines:** pass `forward(ids [1, L], cache) ->
+  logits [1, L, V]` together with `make_cache`. `model` may then be `None`.
+  - This materializes a whole chunk's logits, ~410 MB in bf16 at 2,048 ×
+    100k, where the default runs the head only on assistant positions.
+  - With `forward=None` the path is unchanged: a self-score is still exactly
+    KL 0 and top-1 1.0 (`test_score_with_forward_callable`).
 
 ```python
 build_ref(model, tokenizer, session_path, out_path, max_tokens=65536, n_actions=2,
-          max_new=1024, chunk=2048, seed=0)
+          max_new=1024, chunk=2048, seed=0, model_id=None)
 ```
 
 It writes an `.npz` with these fields:
@@ -74,13 +79,14 @@ It writes an `.npz` with these fields:
 | `action_starts` | `n_actions` assistant-turn starts, sampled with `seed` |
 | `actions` | JSON list of the reference's greedy actions, each up to `max_new` tokens |
 | `max_new` | the generation cap used for `actions` |
+| `model` | `model_id` (the model's path), `""` if none was passed; refs built before this field have no `model` key |
 
 **`max_tokens=65536` truncates the longest sessions.** Pass 131072 for full
 length, as `scripts/bench_kv.build_refs` does; it also refuses a truncated
 reference.
 
 ```python
-score(model, ref_path, chunk=2048, make_cache=None) -> dict
+score(model, ref_path, chunk=2048, make_cache=None, forward=None) -> dict
 ```
 
 It returns:
@@ -92,6 +98,7 @@ It returns:
 | `top1_agree` | top-1 agreement |
 | `peak_mem_gb` | `mx.get_peak_memory()` over the run, reset at the start |
 | `tok_per_s` | prefill throughput over the whole session |
+| `ref_model` | the reference's `model` field, or `None` for refs that predate it |
 
 - It asserts that the positions match the reference, so the ids must be
   identical.
@@ -103,7 +110,8 @@ score_actions(model, tokenizer, ref_path, max_new=None) -> float
 
 - It returns the exact-match fraction over the reference's actions, or NaN
   if the reference has none.
-- It calls `mlx_lm.generate` with `prompt=ids[:start]`, which re-prefills the
+- It uses `greedy_actions(model, tokenizer, ids, starts, max_new)` (public;
+  `_greedy_actions` is kept as an alias). That calls `mlx_lm.generate` with `prompt=ids[:start]`, which re-prefills the
   whole prefix for every action, using `model.make_cache()`.
 
 ### Cache factories
@@ -119,7 +127,10 @@ with one cache per layer:
 
 ### `scripts/diag_actions.py`
 
-`python3 -m scripts.diag_actions --pruned <mlx-lm model dir>`
+`python3 -m scripts.diag_actions --pruned <model dir> [--base <model dir>] [--refs <dir>] [--out <json>]`
+
+The defaults are unchanged: `--base models/Laguna-XS-2.1-mlx-4bit`,
+`--refs refs/prune_actions`, `--out results/action_diag.json`.
 
 - **What it measures:** greedy action match on `refs/prune_actions` for two
   models: the 4-bit base `models/Laguna-XS-2.1-mlx-4bit` (the noise floor,
@@ -129,10 +140,10 @@ with one cache per layer:
   both strings.
 - **Result** (`results/action_diag.json`, 20 actions): base 20/20 exact and
   20/20 same tool; pruned-50 6/20 exact and 18/20 same tool.
-- **It writes `results/action_diag.json` inside lagunaLab and skips any model
-  already in that file.** Running it as-is from another repo would break
-  rule 2. Import the pieces instead: `replay.replay._greedy_actions` and the
-  30-line `run()` loop, with your own output path.
+- **From another repo, always pass `--out` to a path in your own repo.** The
+  default writes `results/action_diag.json` inside lagunaLab (rule 2). Any
+  model already in the output file is skipped. The pieces can also be
+  imported: `replay.replay.greedy_actions` and `run(path, refs)`.
 - **Pointing it at another engine:** `run()` calls `mlx_lm.load(path)`.
   - A packed streaming model needs `load_streaming(pack, slots, cache_limit_gb=1.0)`
     instead.
@@ -187,8 +198,10 @@ django five**.
 - **Nothing on disk** has full-length action references, or action references
   from pruned-50. Building them takes `build_ref` with `n_actions > 0` and
   GPU time.
-- **References don't record which model built them.** The table above is the
-  only record.
+- **The references on disk predate the `model` field,** so `score` returns
+  `ref_model: None` for them. The table above is their only record. New
+  references built through `build_ref(..., model_id=...)` record it; the CLI,
+  `bench_kv`, `prune_sweep` and `prune_point` pass it.
 
 ## Models on disk (`models/`; read-only, rule 4)
 
@@ -280,24 +293,18 @@ Measured so far:
   session over wall time with chunked prefill. Use your own decode loop for
   tok/s (see `bench_kv.decode_at_ctx`).
 
-## Interface changes I'd want before moeStream imports more
+## Interface changes (2026-10-15, all additive)
 
-None of these are made; each would be additive.
+1. Rule 11 in `../.gpu/RULES.md` lists `replay.replay`, `replay.session` and
+   `scripts.diag_actions` as stable.
+2. `replay.replay.greedy_actions` is public; `_greedy_actions` remains.
+3. `forward=` on `assistant_logprobs` and `score` (default `None` is today's
+   path).
+4. `--base`, `--refs` and `--out` on `scripts/diag_actions.py` (defaults
+   unchanged).
+5. References record `model`; `score` returns `ref_model` and tolerates its
+   absence.
 
-1. **List `replay.replay` in the rules.** `score`, `score_actions`,
-   `build_ref` and `assistant_logprobs` are currently unlisted, so they could
-   change without notice. Add a rule-7-style line.
-2. **Make `_greedy_actions` public** as `greedy_actions`, keeping the
-   underscore alias. moeStream shouldn't import a private name.
-3. **Add an optional `forward=` to `assistant_logprobs` and `score`:** a
-   callable `(ids_chunk, cache) -> logits`. It would default to today's
-   `model.lm_head(model.model(...))`, so a non-mlx-lm engine could be scored
-   without a wrapper class.
-4. **Add `--refs`, `--out` and `--base` flags to `scripts/diag_actions.py`,**
-   so it can run from another repo without writing to lagunaLab's `results/`.
-5. **Record which model built each reference** (a `model` string in the
-   `.npz`), and have `score` warn when it doesn't match. This is a deferred
-   minor today.
-6. **Optionally, full-length action references** for pruned-50 on the 5
-   django sessions (`refs/kv` has none). That costs GPU time and needs the
-   coordinator's go.
+Still open: full-length action references for pruned-50 on the 5 django
+sessions (`refs/kv` has none). That costs GPU time and needs the
+coordinator's go.
