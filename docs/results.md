@@ -342,9 +342,9 @@ GPU job started.
 - **Recommendation:**
   - If 1.6 GB more KV fits (3.39 against 1.80 GB at 82k), use the plain
     cache. It's fastest and exact.
-  - If it doesn't fit, try `quantized_decode=True`. It's a cheap A/B, but
-    expect at most ~9 ms per token at 82k from the kernel, plus whatever churn
-    it removes.
+  - If it doesn't fit, turn on `quantized_decode=True` only after a GPU A/B
+    shows it helps; that A/B isn't run yet. Expect at most ~9 ms per token at
+    82k from the kernel, plus whatever churn it removes.
   - Closing the rest needs a fused quantized-KV decode kernel
     (`mx.fast.metal_kernel`). That isn't built.
 
