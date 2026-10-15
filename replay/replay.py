@@ -20,21 +20,28 @@ TOPK = 64
 SUB = 256  # positions per log-softmax batch: 256 x 100k vocab x 4 B = 100 MB
 
 
-def assistant_logprobs(model, ids, mask, chunk=2048, make_cache=None):
-    """Yield (positions, logprobs[n, V] float32) for positions whose next token is assistant."""
+def assistant_logprobs(model, ids, mask, chunk=2048, make_cache=None, forward=None):
+    """Yield (positions, logprobs[n, V] float32) for positions whose next token is assistant.
+
+    `forward(ids [1, L], cache) -> logits [1, L, V]` scores an engine that isn't an mlx-lm
+    model; pass `make_cache` with it (`model` may then be None). It materializes a whole
+    chunk's logits (2048 x 100k x 2 B = 410 MB in bf16), where the default runs the head only
+    on assistant positions.
+    """
     target = np.zeros_like(mask)
     target[:-1] = mask[1:]
     cache = (make_cache or model.make_cache)()
     for a in range(0, len(ids), chunk):
         b = min(a + chunk, len(ids))
-        h = model.model(mx.array(ids[None, a:b]), cache=cache)[0]
+        x = mx.array(ids[None, a:b])
+        h = model.model(x, cache=cache)[0] if forward is None else forward(x, cache)[0]
         sel = np.nonzero(target[a:b])[0]
         if len(sel) == 0:
             mx.eval(h)
             continue
         for s in range(0, len(sel), SUB):
             part = sel[s : s + SUB]
-            lp = model.lm_head(h[mx.array(part)]).astype(mx.float32)
+            lp = (model.lm_head(h[mx.array(part)]) if forward is None else h[mx.array(part)]).astype(mx.float32)
             lp = lp - mx.logsumexp(lp, axis=-1, keepdims=True)
             mx.eval(lp)
             yield part + a, lp
@@ -82,13 +89,13 @@ def build_ref(model, tokenizer, session_path, out_path, max_tokens=65536, n_acti
                         actions=json.dumps(actions), max_new=max_new)
 
 
-def score(model, ref_path, chunk=2048, make_cache=None):
+def score(model, ref_path, chunk=2048, make_cache=None, forward=None):
     ref = np.load(ref_path)
     ids, mask = ref["ids"], ref["mask"]
     kls, agree, i = [], [], 0
     mx.reset_peak_memory()
     t0 = time.perf_counter()
-    for p, lp in assistant_logprobs(model, ids, mask, chunk, make_cache):
+    for p, lp in assistant_logprobs(model, ids, mask, chunk, make_cache, forward):
         n = len(p)
         assert (p == ref["pos"][i : i + n]).all(), "position mismatch vs reference"
         tid = mx.array(ref["top_ids"][i : i + n])

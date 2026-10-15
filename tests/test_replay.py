@@ -71,3 +71,19 @@ def test_score_with_cache_factory(tok, session, tmp_path):
 def test_greedy_actions_is_public_and_keeps_old_name():
     from replay import replay
     assert replay.greedy_actions is replay._greedy_actions
+
+
+def test_score_with_forward_callable(tok, session, tmp_path):
+    m = mlx_model(torch_model())
+    ref = tmp_path / "s.npz"
+    build_ref(m, tok, session, ref, n_actions=0)
+    default = score(m, ref)
+    assert default["kl_top64_mean"] == 0.0 and default["top1_agree"] == 1.0  # default path unchanged
+    calls = []
+
+    def fwd(ids, cache):  # what a non-mlx-lm engine supplies: [1, L] ids -> [1, L, V] logits
+        calls.append(ids.shape[1])
+        return m.lm_head(m.model(ids, cache=cache))
+
+    s = score(None, ref, forward=fwd, make_cache=m.make_cache)
+    assert calls and s["top1_agree"] == 1.0 and abs(s["kl_top64_mean"]) < 1e-5
