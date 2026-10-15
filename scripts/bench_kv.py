@@ -14,6 +14,7 @@ import mlx.core as mx
 import numpy as np
 
 import laguna_mlx  # noqa: F401
+from laguna_mlx import wire_resident
 from laguna_mlx.cache import make_quantized_cache
 from replay.replay import build_ref, score
 
@@ -121,7 +122,7 @@ def main():
     p.add_argument("--target", choices=["resident", "streaming"], default="resident")
     p.add_argument("--slots", type=int, default=32)
     a = p.parse_args()
-    mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
+    wire_resident(a.target == "resident")
     if a.target == "resident":
         model, tok = load(MODEL)
         refs = build_refs(model, tok, HELDOUT, REFS)

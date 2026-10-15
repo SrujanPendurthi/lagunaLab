@@ -2,6 +2,7 @@
 
 python3 -m scripts.profile_stream              # pruned-50 pack, slots=32, at short and 32k context
 python3 -m scripts.profile_stream --resident   # same, pruned-50 fully resident: no sync, no loads
+python3 -m scripts.profile_stream --slots 16 32 64 128   # slot sweep, fresh model per count, 1 GB pool cap
 python3 -m scripts.profile_stream --split      # force slot writes to finish inside load (write_ms); adds 32k with pre-read expert files
 
   sync_ms   time blocked in np.array(indices): the GPU finishing everything queued
@@ -126,12 +127,23 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--resident", action="store_true")
     p.add_argument("--split", action="store_true")
+    p.add_argument("--slots", type=int, nargs="+")
     a = p.parse_args()
-    if a.resident:  # streaming fits without it; a max wired limit starves the rest of the machine
-        mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
+    laguna_mlx.wire_resident(a.resident)
     ids = np.load(SESSION)["ids"]
     res = json.loads(OUT.read_text()) if OUT.exists() else {}
     save = lambda: OUT.write_text(json.dumps(res, indent=1))  # after every row: a kill keeps finished rows
+    if a.slots:
+        rows = res["sweep_capped"] = []
+        for n in a.slots:
+            model = streaming.load_streaming(PACK, n, cache_limit_gb=1.0)[0]
+            for ctx in (256, 32768):
+                rows.append({"slots": n, **profile(model, ids[:ctx])})
+                _show(rows[-1])
+                save()
+            del model
+            mx.clear_cache()  # one model at a time
+        return
     model = load(MODEL)[0] if a.resident else streaming.load_streaming(PACK, 32, cache_limit_gb=1.0)[0]
     runs = [(256, None), (32768, None)] + ([(32768, PACK)] if a.split else [])
     rows = []

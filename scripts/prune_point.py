@@ -12,6 +12,7 @@ from pathlib import Path
 import mlx.core as mx
 
 import laguna_mlx  # noqa: F401
+from laguna_mlx import wire_resident
 from laguna_mlx.dflash import generate_greedy
 from laguna_mlx.pruning import keep_sets, load_stats, prune_checkpoint, scores
 from laguna_mlx.streaming import load_streaming, stream_stats
@@ -46,7 +47,7 @@ def main():
     p.add_argument("--cap", type=int, default=16384)
     p.add_argument("--actions", type=int, default=4)
     a = p.parse_args()
-    mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
+    wire_resident(True)
     pct = int(round(a.ratio * 100))
     out_dir = Path(f"models/Laguna-XS-2.1-pruned-{a.criterion}-{pct}")
     pack_dir = Path(f"models/Laguna-XS-2.1-pruned-{a.criterion}-{pct}-packed")

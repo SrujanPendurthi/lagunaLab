@@ -15,6 +15,7 @@ import mlx.core as mx
 import numpy as np
 
 import laguna_mlx  # noqa: F401
+from laguna_mlx import wire_resident
 from laguna_mlx.pruning import ExpertSaliencyRecorder, apply_mask, keep_sets, load_stats, scores
 from mlx_lm import load
 from replay.replay import build_ref, score
@@ -151,7 +152,7 @@ def main():
     p.add_argument("stage", choices=["calibrate", "refs", "sweep"])
     p.add_argument("--cap", type=int, default=16384)
     a = p.parse_args()
-    mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
+    wire_resident(True)
     model, tok = load(MODEL)
     {"calibrate": lambda: calibrate(model, tok, a.cap), "refs": lambda: refs(model, tok, a.cap),
      "sweep": lambda: sweep(model)}[a.stage]()

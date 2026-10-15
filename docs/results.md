@@ -9,6 +9,13 @@ file*. Different scripts use different prompts, lengths, decode loops, and
 machine states. For example, the full resident model measured 18.6 tok/s in
 `streaming.json`, 40.3 in `dflash.json` and 34.2 in `prune_point.json`.
 
+**Streaming numbers before S5.** Every streaming result before the S5 option-2
+rerun was measured with MLX's free-buffer pool uncapped. That pool grows during
+long prefills and pushes the expert files out of the page cache. With a 1 GB cap,
+the 32k streaming decode step halved (S5 section). Those older streaming
+numbers are marked below. They hold as measured, but for streaming speed and
+for slot-count conclusions the capped numbers supersede them.
+
 ---
 
 ## The session corpus
@@ -57,6 +64,9 @@ confidence in the port:
 
 Source: `results/streaming.json` (Task 18; full, unpruned 4-bit model).
 
+> **Uncapped MLX buffer pool.** Streaming numbers here were measured with an uncapped MLX buffer pool. For streaming, the capped numbers in "Streaming decode profile (Task S5)" supersede them. The flat decode across slot counts below is confounded by it. A capped
+re-sweep on the pruned model is in the S5 section.
+
 | Target | Decode tok/s | Prefill tok/s | Peak GPU GB | Expert hit rate |
 |---|---|---|---|---|
 | Resident | 18.6 | 40.6 | 19.81 | n/a |
@@ -68,7 +78,8 @@ Source: `results/streaming.json` (Task 18; full, unpruned 4-bit model).
 At 16k context, streaming decode drops to 4.4 tok/s at both 16 and 32 slots.
 
 - **Decode speed is flat across slot budgets** even though the hit rate more
-  than doubles. So SSD reads are not the decode bottleneck. The suspect is the
+  than doubles. *(Uncapped pool: the conclusion below doesn't hold for the
+  capped pool; see S5.)* So SSD reads are not the decode bottleneck. The suspect is the
   per-layer GPU→CPU sync of router indices (39 per token), which Task S5
   profiles.
 - **Prefill does scale with slots**: more experts fit per chunk, so there are
@@ -88,6 +99,8 @@ This is the first MLX port of Poolside's DFlash draft model.
 |---|---|---|---|
 | Resident | 40.3 tok/s | 0.36×–0.86× (9 settings: draft bits 16/8/4 × n_draft 3/7/15) | 1.82–2.51 |
 | Streaming, 32 slots | 11.4 tok/s | 1.06× (n=3), 0.65× (n=7), 0.32× (n=15) | 1.84–2.75 |
+
+> **Uncapped MLX buffer pool.** Streaming numbers here were measured with an uncapped MLX buffer pool. For streaming, the capped numbers in "Streaming decode profile (Task S5)" supersede them.
 
 Is the port wrong? The S1 diagnostic says no:
 
@@ -123,6 +136,8 @@ slower, because verify is expensive.
 
 S4 measured on real weights: 256 generated tokens after real 8k-token session
 prefixes (5 sessions).
+
+> **Uncapped MLX buffer pool.** Streaming numbers here were measured with an uncapped MLX buffer pool. For streaming, the capped numbers in "Streaming decode profile (Task S5)" supersede them.
 
 | Target | Setting | Decode speedup | End-to-end speedup | Mean accepted |
 |---|---|---|---|---|
@@ -188,6 +203,8 @@ Materialized checkpoint (`prune_point.json`, short prompts):
 | Resident peak GPU | 18.90 GB | 10.10 GB |
 | Resident decode | 34.2 tok/s | 38.7 tok/s |
 | Held-out top-1 / KL | (reference) | 0.945 / 0.081 |
+
+> **Uncapped MLX buffer pool.** Streaming numbers here were measured with an uncapped MLX buffer pool. For streaming, the capped numbers in "Streaming decode profile (Task S5)" supersede them. This applies to the streaming row below.
 | Streaming, 32 slots: peak / decode / hit rate | | 3.97 GB / 12.8 tok/s / 0.618 |
 
 Why pruned decode is faster was not profiled; smaller expert tensors per layer is the likely reason.
@@ -231,6 +248,10 @@ Method: quantize K/V on the 10 full-attention layers to 8 or 4 bits. All 5
 django sessions were run at full length, and peak is the maximum over prefill
 and decode.
 
+The streaming row was measured with an uncapped MLX buffer pool, so its
+decode and prefill speed are superseded for streaming. Its quality, and peak
+from `mx.get_peak_memory`, which doesn't count the pool, still stand.
+
 | Setting | Peak GB | KV GB | Top-1 | KL mean | KL p99 max | Prefill tok/s | Decode tok/s @82k | Gate |
 |---|---|---|---|---|---|---|---|---|
 | Resident, plain | 14.60 | 3.39 | 1.0 | 0 | 0 | 95.8 | 7.42 | fail: budget |
@@ -269,6 +290,9 @@ the machine into a watchdog reboot. `DequantKVCache` replaced that path, and
 Source: `results/stream_profile.json`. Pruned-50 pack, 32 slots, 32 greedy
 decode steps after a prefix of the longest session. All times are ms per
 decode step.
+
+> **Uncapped MLX buffer pool.** Streaming numbers here were measured with an uncapped MLX buffer pool. For streaming, the capped numbers in "Streaming decode profile (Task S5)" supersede them. The first table and the resident-control comparison are uncapped. The
+option-2 rerun further down is capped.
 
 | Context | tok/s | Step | Router sync | Expert load (wall) | pread (thread-summed) | Other | Hit rate | Misses/step |
 |---|---|---|---|---|---|---|---|---|
@@ -409,9 +433,8 @@ true`).
   same as at 256.
 - **What's left at 32k** is mostly sync (64.9 ms): GPU compute plus the
   per-layer round-trip. The resident model takes 46.8 ms per step here.
-- **Not done yet:** the cap is set only in `profile_stream`. `load_streaming`,
-  `serve_streaming` and the benchmarks still run uncapped. Applying it there is
-  the obvious next step, and it changes a stable interface that moeStream uses.
+- **Follow-up done (9c35d6e):** `load_streaming(..., cache_limit_gb=None)` is
+  an opt-in cap. `serve_streaming` and `profile_stream` pass 1.0.
 
 ## Open items
 

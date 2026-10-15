@@ -11,6 +11,7 @@ import mlx.core as mx
 import numpy as np
 
 import laguna_mlx  # noqa: F401
+from laguna_mlx import wire_resident
 from mlx_lm import load
 from replay.replay import _greedy_actions
 
@@ -44,7 +45,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--pruned", required=True)
     a = p.parse_args()
-    mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
+    wire_resident(True)
     out = Path("results/action_diag.json")
     res = json.loads(out.read_text()) if out.exists() else {}
     for name, path in (("base", BASE), ("pruned", a.pruned)):

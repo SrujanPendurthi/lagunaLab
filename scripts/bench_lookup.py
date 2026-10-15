@@ -53,6 +53,7 @@ from pathlib import Path
 import mlx.core as mx
 
 import laguna_mlx  # noqa: F401
+from laguna_mlx import wire_resident
 from laguna_mlx.cache import make_trimmable_cache
 from laguna_mlx.dflash import generate_greedy, generate_lookup
 from replay.session import load_session, tokenize
@@ -394,7 +395,7 @@ def _run_workload(name, result, target, items, max_tokens, eos, swap, over, labe
 def _run_target(name, args):
     """Loads the model once, resumes any already-completed items for this target from
     results/lookup.json (per-item checkpointing: see _run_workload), then runs the rest."""
-    mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
+    wire_resident(name == "resident")
     swap = [("start", swap_gb())]
     settings = SETTINGS[name]
     prior = _load_results().get(name) or {}

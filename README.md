@@ -19,6 +19,11 @@ mlx-lm 0.31.3, Python 3.13). Every number in these docs comes from a file in
 
 Sources: `results/prune_point.json` (short prompts), `results/kv.json` (82k session).
 
+The streaming speeds in this table were measured before the MLX buffer-pool
+cap. With `load_streaming(..., cache_limit_gb=1.0)`, the 32k-context streaming
+decode step halved (169.9 to 84.7 ms; `results/stream_profile.json`, S5 in
+[docs/results.md](docs/results.md)). The memory and quality numbers stand.
+
 **The 16 GB answer:** the pruned model, streamed from SSD, runs the longest
 captured agent session (82,671 tokens) at 8.04 GB peak, under the 12 GB budget
 assumed for a 16 GB Mac, with no KV-cache compression needed. KV quantization

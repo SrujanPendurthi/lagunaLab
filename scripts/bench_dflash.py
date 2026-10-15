@@ -16,6 +16,7 @@ from pathlib import Path
 import mlx.core as mx
 
 import laguna_mlx  # noqa: F401
+from laguna_mlx import wire_resident
 from laguna_mlx.dflash import generate_dflash, generate_greedy, load_draft
 from scripts.check_parity import PROMPTS
 
@@ -34,7 +35,7 @@ NOTES = [
 ]
 DRAFT = "models/Laguna-XS-2.1-DFlash"
 
-mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
+wire_resident(a.target == "resident")
 if a.target == "resident":
     from mlx_lm import load
     target, tok = load("models/Laguna-XS-2.1-mlx-4bit")

@@ -33,6 +33,7 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 
+from laguna_mlx import wire_resident
 from laguna_mlx.cache import make_trimmable_cache
 from laguna_mlx.dflash import _target_step, generate_dflash, generate_greedy, load_draft
 from scripts.check_parity import PROMPTS
@@ -293,7 +294,7 @@ def _load_target(name, slots=32):
 def _run_target(name):
     """Stop-and-record (not crash) if swap crosses MAX_SWAP_GB at a checkpoint;
     swap_gb() itself still fails closed (raises) if `sysctl` is unparseable."""
-    mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
+    wire_resident(name == "resident")
     swap = [("start", swap_gb())]
     result = {"swap_gb": swap, "stopped": None}
 
