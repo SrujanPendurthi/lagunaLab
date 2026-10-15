@@ -69,17 +69,33 @@ class DequantKVCache(_BaseCache):
     [heads, L, context] score matrix: ~16 GB per layer at 82k context, which hung the machine.
 
     No `bits` attribute on purpose: mlx-lm routes any cache with one to its quantized SDPA.
+
+    `quantized_decode=True` (off by default): single-token steps skip the dequantize and return
+    the quantized K/V tuples, and `bits` exists for that step only, so mlx-lm's quantized SDPA
+    reads the packed cache directly. At L == 1 its score matrix is one row per head, so the
+    materialization problem above doesn't apply. Without it, decode dequantizes the whole layer
+    every token (~0.34 GB written per full-attention layer at 82k).
     """
 
-    def __init__(self, group_size=64, bits=8):
+    def __init__(self, group_size=64, bits=8, quantized_decode=False):
         self.q = QuantizedKVCache(group_size=group_size, bits=bits)
+        self.quantized_decode = quantized_decode
+        self._quantized_step = False
 
     def update_and_fetch(self, keys, values):
-        # ponytail: decode re-dequantizes the whole layer every token (~0.3 GB per layer at
-        # 82k); keep a bf16 copy of the prefix or use quantized SDPA for L == 1 if decode is slow
         qk, qv = self.q.update_and_fetch(keys, values)
+        # the attention call reads `bits` right after this, on the same layer's cache
+        self._quantized_step = self.quantized_decode and keys.shape[2] == 1
+        if self._quantized_step:
+            return qk, qv
         g, b = self.q.group_size, self.q.bits
         return mx.dequantize(*qk, group_size=g, bits=b), mx.dequantize(*qv, group_size=g, bits=b)
+
+    @property
+    def bits(self):
+        if not self._quantized_step:
+            raise AttributeError("bits")  # hasattr(cache, "bits") is False: fused bf16 SDPA
+        return self.q.bits
 
     @property
     def offset(self):
@@ -114,13 +130,13 @@ class DequantKVCache(_BaseCache):
         return self.q.nbytes
 
 
-def make_quantized_cache(model, bits=8, group_size=64):
+def make_quantized_cache(model, bits=8, group_size=64, quantized_decode=False):
     """Quantized KV storage on full-attention layers; sliding layers keep their window."""
     a = model.args
     if a.head_dim % group_size:
         raise ValueError(f"head_dim {a.head_dim} is not a multiple of group_size {group_size}")
     return [
         RotatingKVCache(max_size=a.sliding_window)
-        if lt == "sliding_attention" else DequantKVCache(group_size=group_size, bits=bits)
+        if lt == "sliding_attention" else DequantKVCache(group_size=group_size, bits=bits, quantized_decode=quantized_decode)
         for lt in a.layer_types
     ]

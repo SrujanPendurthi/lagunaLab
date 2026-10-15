@@ -272,8 +272,8 @@ resident prefill was 92.6 (plain), 104.0 (8-bit) and 102.4 (4-bit) tok/s.
 - **Streaming needs no compression.** At 8.04 GB it is about 4 GB under budget,
   and identical to resident.
 - **Quantized KV decodes slower** at 82k (4.1 / 5.0 vs. 7.4 tok/s), because
-  `DequantKVCache` re-dequantizes each layer per token. Prefill is faster with
-  quantized KV; why was not investigated.
+  `DequantKVCache` re-dequantizes each layer per token (~58 ms per token at
+  82k; see below). Prefill is faster with quantized KV; why was not investigated.
 
 **Decision (human, 2026-10-14):** pruned streaming with the plain cache is the
 16 GB answer. KV quantization stays in the codebase but is not the operating
@@ -288,6 +288,65 @@ unmeasured, is in [part3-answer.md](part3-answer.md).
 full score matrices (about 16 GB per layer at 82k). The first 8-bit run hung
 the machine into a watchdog reboot. `DequantKVCache` replaced that path, and
 `bench_kv` now aborts if any row peaks above 16 GB. See runbook.md.
+
+### Why quantized KV decodes slower, and the `quantized_decode` flag
+
+Source: `results/kv_decode_micro.json` (`scripts/micro_kv_decode.py`). It times
+one full-attention layer's decode attention on synthetic K/V with the real
+shapes: 48 query heads, 8 KV heads, head_dim 128, 8-bit, group size 64, no
+weights. The model has 10 such layers. The run finished before moeStream's
+GPU job started.
+
+| Per layer, one token | 8k | 32k | 82,671 |
+|---|---|---|---|
+| Plain bf16 K/V, fused SDPA | 1.97 ms | 2.42 ms | 7.19 ms |
+| 8-bit, dequantize then fused SDPA (today) | 3.43 ms | 4.97 ms | 12.98 ms |
+| 8-bit, mlx-lm quantized SDPA (`quantized_decode=True`) | 1.04 ms | 3.79 ms | 12.05 ms |
+| K/V size, bf16 / 8-bit | 0.034 / 0.018 GB | 0.134 / 0.071 GB | 0.339 / 0.180 GB |
+
+- **The dequantize is the cost.** At 82k, each token reads 0.180 GB of
+  packed K/V and writes 0.339 GB of bf16 per layer, then SDPA reads that
+  back: about 0.86 GB moved per layer, against 0.339 GB for plain.
+  - Measured, it adds 5.8 ms per layer, or **~58 ms per token** over 10 layers.
+  - At 32k it adds ~26 ms per token.
+- **That explains about half the resident gap.** Resident 8-bit against plain
+  at 82k is 244 against 135 ms per token (4.10 against 7.42 tok/s), a 109 ms
+  gap.
+  - The rest is not measured. The likely cause is buffer churn: the 0.68 GB
+    of bf16 temporaries per layer per token must come from MLX's buffer pool,
+    and they can't be recycled when the pool is capped or full.
+  - moeStream's gap (3.1–3.3 against 6.87 tok/s) comes from a different
+    engine, and its plain-cache figure is its own measurement.
+- **`quantized_decode=True` (off by default)** is on `DequantKVCache` and
+  `make_quantized_cache`.
+  - On single-token steps it hands mlx-lm's quantized SDPA the packed K/V
+    directly. The cache exposes `bits` for that step only, so it doesn't fall
+    into the prefill score-matrix trap above.
+  - Prefill is unchanged and bit-identical. Decode matches the dequantize
+    path within 1e-3 and gives the same argmax (tiny-model tests in
+    `tests/test_cache.py`).
+- **Expected gain from the flag:**
+  - **82k: small, ~9 ms per token** (0.9 ms per layer). Pinned MLX's quantized
+    matmuls at this shape run at ~15 GB/s effective, against ~47 GB/s for
+    fused SDPA on bf16. Reading half the bytes doesn't pay off.
+  - **32k: ~12 ms per token.**
+  - **8k: faster than plain.**
+  - It also removes the 0.68 GB of temporaries per layer. So if buffer churn
+    is the unmeasured half of the gap, the flag could win more than these
+    figures. Only a GPU A/B can tell.
+  - Memory: no change.
+- **A persistent bf16 copy of the prefix is never worth it.** It would hold
+  8-bit plus bf16, 1.80 + 3.39 = 5.19 GB of KV at 82k. The plain cache is
+  3.39 GB and already decodes at full speed. Any budget that fits the copy
+  fits the plain cache with 1.8 GB to spare.
+- **Recommendation:**
+  - If 1.6 GB more KV fits (3.39 against 1.80 GB at 82k), use the plain
+    cache. It's fastest and exact.
+  - If it doesn't fit, try `quantized_decode=True`. It's a cheap A/B, but
+    expect at most ~9 ms per token at 82k from the kernel, plus whatever churn
+    it removes.
+  - Closing the rest needs a fused quantized-KV decode kernel
+    (`mx.fast.metal_kernel`). That isn't built.
 
 ---
 

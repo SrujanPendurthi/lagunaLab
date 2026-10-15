@@ -91,3 +91,30 @@ def test_quantized_cache_prefill_never_materializes_scores(model64):
     plain = prefill_peak(model64.make_cache())
     quant = prefill_peak(make_quantized_cache(model64, 8))
     assert quant < plain + 100e6, (plain, quant)
+
+
+def test_quantized_decode_matches_dequantized_path(model64):
+    ids = _ids(300)
+    splits = [(0, 200), (200, 260)] + [(i, i + 1) for i in range(260, 300)]
+    out = {}
+    for flag in (False, True):
+        cache = make_quantized_cache(model64, 8, quantized_decode=flag)
+        out[flag] = [np.array(model64(ids[:, a:b], cache=cache)) for a, b in splits]
+    for a, b in zip(out[False][:2], out[True][:2]):
+        np.testing.assert_array_equal(a, b)  # multi-token chunks take the unchanged path
+    # decode: same packed K/V, quantized_matmul instead of dequantize + fused SDPA
+    np.testing.assert_allclose(np.concatenate(out[True][2:], 1), np.concatenate(out[False][2:], 1),
+                               atol=1e-3, rtol=1e-3)
+    assert (np.concatenate(out[True][2:], 1).argmax(-1) == np.concatenate(out[False][2:], 1).argmax(-1)).all()
+
+
+def test_quantized_decode_exposes_bits_only_on_single_token_steps():
+    c = DequantKVCache(bits=8, quantized_decode=True)
+    kv = lambda n: mx.random.normal((1, 2, n, 64)).astype(mx.bfloat16)
+    k, _ = c.update_and_fetch(kv(5), kv(5))
+    assert isinstance(k, mx.array) and not hasattr(c, "bits")
+    k, _ = c.update_and_fetch(kv(1), kv(1))
+    assert isinstance(k, tuple) and c.bits == 8
+    off = DequantKVCache(bits=8)
+    off.update_and_fetch(kv(1), kv(1))
+    assert not hasattr(off, "bits")

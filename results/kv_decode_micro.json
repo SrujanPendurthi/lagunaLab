@@ -1,0 +1,36 @@
+{
+ "shapes": {
+  "q_heads": 48,
+  "kv_heads": 8,
+  "head_dim": 128,
+  "group_size": 64,
+  "bits": 8,
+  "iters": 50
+ },
+ "rows": {
+  "8192": {
+   "plain_ms": 1.9649699999717993,
+   "dequant_sdpa_ms": 3.433963319985196,
+   "dequant_only_ms": 0.9763066601590253,
+   "quantized_sdpa_ms": 1.0378991800826043,
+   "bf16_kv_gb": 0.033554432,
+   "q8_kv_gb": 0.017825792
+  },
+  "32768": {
+   "plain_ms": 2.416699999885168,
+   "dequant_sdpa_ms": 4.970735819952097,
+   "dequant_only_ms": 2.6003750000381842,
+   "quantized_sdpa_ms": 3.7879008398158476,
+   "bf16_kv_gb": 0.134217728,
+   "q8_kv_gb": 0.071303168
+  },
+  "82671": {
+   "plain_ms": 7.192125839937944,
+   "dequant_sdpa_ms": 12.982082499947865,
+   "dequant_only_ms": 6.076089999987744,
+   "quantized_sdpa_ms": 12.048494160117116,
+   "bf16_kv_gb": 0.338620416,
+   "q8_kv_gb": 0.179892096
+  }
+ }
+}
