@@ -26,5 +26,34 @@
    "hit_rate": 0.6967147435897436,
    "misses_per_step": 94.625
   }
- ]
+ ],
+ "resident": {
+  "model": "models/Laguna-XS-2.1-pruned-50",
+  "rows": [
+   {
+    "context": 256,
+    "steps": 32,
+    "tok_s": 43.22245703748532,
+    "step_ms": 23.136121094012196,
+    "sync_ms": 0.0,
+    "load_ms": 0.0,
+    "pread_ms": 0.0,
+    "other_ms": 23.136121094012196,
+    "hit_rate": 0.0,
+    "misses_per_step": 0.0
+   },
+   {
+    "context": 32768,
+    "steps": 32,
+    "tok_s": 21.39173575260185,
+    "step_ms": 46.747024718570174,
+    "sync_ms": 0.0,
+    "load_ms": 0.0,
+    "pread_ms": 0.0,
+    "other_ms": 46.747024718570174,
+    "hit_rate": 0.0,
+    "misses_per_step": 0.0
+   }
+  ]
+ }
 }

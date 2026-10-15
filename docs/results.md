@@ -288,22 +288,45 @@ Readings:
 
 - **Sync is the largest bucket in both runs.** The brief's rule therefore points
   at overlapping the host round-trip.
-- **This profile can't split sync into GPU compute and stall.** The rough split
-  below compares numbers from two different scripts, so treat it as an
-  estimate: the pruned resident model decodes at 38.7 tok/s (25.9 ms/step,
-  `prune_point.json`). That would leave about 13 ms/step of sync stall and
-  16 ms/step of loading at short context.
 - **Loading costs 4× more per step at 32k, for similar miss counts.** Per-miss
   pread time rose about 5×. Not investigated; one possibility is expert pages
   falling out of the macOS page cache as the KV cache grows.
 
+### Resident control run
+
+Source: `results/stream_profile.json` → `resident`. Same script, same prefixes,
+pruned-50 fully in memory, so there's no sync and no loading.
+
+| Context | Resident step | Streaming step | Streaming overhead | of which: expert load | of which: everything else |
+|---|---|---|---|---|---|
+| 256 | 23.1 ms (43.2 tok/s) | 54.9 ms | 31.7 ms | 16.2 ms (51%) | 15.6 ms (49%) |
+| 32,768 | 46.8 ms (21.4 tok/s) | 169.9 ms | 123.1 ms | 65.4 ms (53%) | 57.7 ms (47%) |
+
+Here "everything else" means streaming step − resident step − expert load.
+
+- **The streaming overhead splits roughly half and half.** About half is expert
+  loading. The other half is the extra time inside the sync bucket beyond
+  resident compute: the GPU sitting idle while the host routes, plus any
+  GPU-side cost streaming adds, such as slot writes. This profile can't
+  separate those two.
+- **Both halves grow with context** (×4 and ×3.7 from 256 to 32k), while
+  resident compute only doubles.
+- **Skipping the sync on steps with no misses won't help.** At about 84–95
+  misses per step across 39 layers, almost every layer misses on almost every
+  step.
+- **Prefetch was already tried in moeStream** (sibling project: next-layer
+  routing guess, background preads). Its own team reports it about breaks even:
+  ~10 ms/token of reads hidden, ~18 ms/token of extra sync added, ~30% wrong
+  guesses, rejected by its tuner in 6 of 8 A/B pairs. These are moeStream's
+  numbers, not in this repo's `results/`.
+
 ## Open items
 
-- **S5 follow-up:** pick the fix. Candidates are prefetching the next layer's
-  experts from speculative routing (hides both the stall and the load), or
-  keeping the expert→slot table on the GPU so steps without misses don't sync.
-  A resident run of the same profile would separate GPU compute from stall
-  first.
+- **S5 follow-up: no fix picked yet.** Prefetch is about break-even (moeStream),
+  and sync-skipping can't trigger at this miss rate. The remaining levers are
+  fewer misses (more slots; the pruned model has 128 experts per layer) and
+  finding what makes the non-load overhead grow with context. Slot-write
+  copies and the page cache are the first suspects.
 - **Task 11: mlx-lm upstream PR** adding Laguna. Not filed; it is
   outward-facing, so it needs a human go-ahead.
 - **Prompt lookup:** keep/drop decision not recorded (see above).
