@@ -85,12 +85,14 @@ def warm(pack):
 def profile(model, ids, n=32, chunk=2048, split=False, warm_pack=None):
     """Prefill `ids`, then time n greedy decode steps. Returns per-step ms."""
     mx.clear_cache()  # drop buffers the previous row left in MLX's free pool
+    mx.reset_peak_memory()
     cache = model.make_cache()
     for a in range(0, len(ids), chunk):
         h = model.model(mx.array(ids[None, a : a + chunk]), cache=cache)
         mx.eval(h)
     tok = mx.argmax(model.lm_head(h[:, -1]), axis=-1)
     mx.eval(tok)
+    cache_gb = mx.get_cache_memory() / 1e9  # freed-but-kept buffers: top's footprint counts them, peak doesn't
     if warm_pack:
         warm(warm_pack)
     before = streaming.stream_stats(model)
@@ -109,7 +111,8 @@ def profile(model, ids, n=32, chunk=2048, split=False, warm_pack=None):
             "sync_ms": ms(t["sync"]), "load_ms": ms(t["load"]), "pread_ms": ms(t["pread"]),
             "write_ms": ms(t["write"]), "other_ms": ms(step - t["sync"] - t["load"] - t["write"]),
             "hit_rate": hits / max(1, hits + misses), "misses_per_step": misses / n,
-            "warm": bool(warm_pack), "tokens": toks}
+            "warm": bool(warm_pack), "peak_gb": mx.get_peak_memory() / 1e9, "cache_after_prefill_gb": cache_gb,
+            "tokens": toks}
 
 
 def _show(r):
@@ -129,6 +132,8 @@ def main():
     a = p.parse_args()
     if a.resident:  # streaming fits without it; a max wired limit starves the rest of the machine
         mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
+    else:  # ponytail: 1 GB free-buffer pool; the uncapped pool took the footprint to the 14 GB watchdog at 32k prefill
+        mx.set_cache_limit(1 << 30)
     ids = np.load(SESSION)["ids"]
     res = json.loads(OUT.read_text()) if OUT.exists() else {}
     save = lambda: OUT.write_text(json.dumps(res, indent=1))  # after every row: a kill keeps finished rows

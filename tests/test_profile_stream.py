@@ -39,3 +39,4 @@ def test_split_times_slot_writes_and_warm_reads_the_pack(tmp_path):
     assert plain["write_ms"] == 0 and not plain["warm"]
     assert split["write_ms"] > 0 and split["warm"]
     assert split["tokens"] == plain["tokens"] and len(plain["tokens"]) == 6  # timing never changes outputs
+    assert plain["peak_gb"] > 0 and plain["cache_after_prefill_gb"] >= 0

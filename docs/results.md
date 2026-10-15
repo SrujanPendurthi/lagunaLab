@@ -367,6 +367,21 @@ user's other apps (footprint ~17 GB, swap rising).
   - MLX's buffer cache is cleared before each row;
   - the watchdog footprint cap is 14 GB.
 
+**Option 2 run (`--ab`): stopped by the watchdog.**
+- **What happened.** The run hit the 14 GB footprint cap during the first
+  model's 32k prefill. Only one row was saved: `stream_profile.json` →
+  `ab.per_expert`, 256 context.
+  - That row was 72.5 ms/step against 54.9 in the earlier baseline, with sync
+    51 ms against 34.5.
+  - Two YouTube tabs were playing during this run, so its speed numbers can't
+    be compared with earlier runs.
+- **Suspected cause (not verified).** MLX keeps freed buffers in a pool, and
+  top's footprint counts that pool while `mx.get_peak_memory` doesn't.
+  `bench_kv` measured an 8.04 GB peak for the whole 82k streaming session.
+- **Changes for the next run:**
+  - streaming runs now cap the pool at 1 GB (`mx.set_cache_limit`);
+  - each row records `peak_gb` and `cache_after_prefill_gb`.
+
 ## Open items
 
 - **S5 follow-up: no fix picked yet.** See "Fix options" above; recommendation
