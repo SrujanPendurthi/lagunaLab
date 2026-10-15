@@ -554,6 +554,11 @@ work is layer L's experts, residual, layer L+1's norm, attention and router.
 - **The rest of the floor is out of compile's reach.** It is per-sync GPU idle
   time and Metal commit latency, 39 times per token.
 
+**Drop-on-miss (stage 1 of the GPU-side routing note), measured: fails.** At
+64 slots, KL 0.146 and top-1 0.937 against the exact path, with 14% of picks
+dropped (`results/drop_sim.json`; details in
+[gpu-side-routing.md](gpu-side-routing.md)).
+
 **Conclusion:** the sync floor is structural to per-layer host routing. The
 next real lever would remove syncs altogether: routing on the GPU with a
 device-side expert table and on-GPU miss handling. That is a redesign of the

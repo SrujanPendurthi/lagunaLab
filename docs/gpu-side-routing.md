@@ -1,6 +1,7 @@
 # Design note: GPU-side expert routing (removing the per-layer sync)
 
-Status: proposal, nothing built. Written 2026-10-15 for a go/no-go decision.
+Status: **stage 1 measured, fails the quality gate; no-go at 64 slots** (see
+"Stage 1 result" at the end). Written 2026-10-15.
 Measured numbers come from `results/stream_profile.json` and are named
 inline. Estimates are labelled as estimates.
 
@@ -195,3 +196,46 @@ KL and top-1 under drop. If it fails the gate, stop; nothing else gets built.
 **No-go if exact output is a requirement** for the 16 GB target. Without it,
 the sync floor stays. The remaining exact lever is more slots, which costs
 memory: 128 slots is 68.9 ms against 72.2 at 64.
+
+## Stage 1 result (2026-10-15): fails the gate
+
+Source: `results/drop_sim.json` (`scripts/sim_drop.py`). Setup:
+
+- pruned-50 pack, 64 slots, 1 GB pool cap;
+- the 5 django sessions, each processed exactly up to 32k tokens;
+- 8 decode windows of 128 tokens per session, teacher-forced token by token,
+  each snapped forward to an assistant span;
+- every window run with drop on, then trimmed off the cache and run exactly.
+
+KL is full-vocab KL(exact || drop) on the assistant target tokens.
+
+| Session | Assistant tokens | KL mean | KL p99 | Top-1 | Drop rate |
+|---|---|---|---|---|---|
+| 10914 | 473 | 0.182 | 4.16 | 0.930 | 0.145 |
+| 10924 | 862 | 0.177 | 2.59 | 0.910 | 0.149 |
+| 11001 | 561 | 0.119 | 2.72 | 0.936 | 0.128 |
+| 11019 | 680 | 0.168 | 2.65 | 0.943 | 0.160 |
+| 11039 | 793 | 0.092 | 1.25 | 0.966 | 0.119 |
+| **All (token-weighted)** | 3,369 | **0.146** | 4.16 (max) | **0.937** | 0.140 (mean) |
+
+The gate was KL ≤ 0.02 and top-1 ≥ 0.98. KL is 7× over it, and top-1 misses
+by 4 points.
+
+- **The drop rate is twice the estimate:** 14%, not 7%. The 7% came from the
+  steady-state decode misses in `sweep_capped`, measured after 32 decode steps.
+  These windows start right after a prefill chunk, when the slot cache holds
+  what the prompt used, not what generation uses. A real agent alternates
+  between the two every turn, so this is the realistic rate.
+- **Per layer,** the drop rate is 11–25%. It's highest in the first two MoE
+  layers (25%, 22%).
+- **Verdict: no-go for drop-on-miss at 64 slots.** Building the sync-free path
+  (stage 2) isn't justified. More slots lower the drop rate, but 128 slots
+  holds every expert, where the sync floor also comes with 12.2 GB. The current
+  exact answer (64 slots, cap, 10.16 GB, 6.87 tok/s at 82k) stands.
+- **Still open, the user's call:**
+  - a drop variant that keeps the top-1 pick exact: sync only when the top-1
+    expert misses. That needs its sync per layer, so it saves nothing unless
+    the check moves on device. Not pursued;
+  - **removing the simulation code** (`StreamingSwitchGLU.drop_misses`, off,
+    and `scripts/sim_drop.py`). It's kept for now so this result can be
+    reproduced.

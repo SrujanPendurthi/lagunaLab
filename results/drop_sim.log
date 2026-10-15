@@ -1,1 +1,14 @@
 [transformers] The tokenizer you are loading from 'models/Laguna-XS-2.1-pruned-50-packed' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+django__django-10914 {'tokens': 78112, 'ctx': 32768, 'windows': 8, 'window': 128, 'assistant_tokens': 473, 'kl_mean': 0.1819, 'kl_p99': 4.1612, 'top1': 0.9302, 'drop_rate': 0.1448}
+django__django-10924 {'tokens': 82196, 'ctx': 32768, 'windows': 8, 'window': 128, 'assistant_tokens': 862, 'kl_mean': 0.1766, 'kl_p99': 2.5851, 'top1': 0.9095, 'drop_rate': 0.1485}
+django__django-11001 {'tokens': 80540, 'ctx': 32768, 'windows': 8, 'window': 128, 'assistant_tokens': 561, 'kl_mean': 0.1191, 'kl_p99': 2.7193, 'top1': 0.9358, 'drop_rate': 0.1278}
+django__django-11019 {'tokens': 42771, 'ctx': 32768, 'windows': 8, 'window': 128, 'assistant_tokens': 680, 'kl_mean': 0.1679, 'kl_p99': 2.6528, 'top1': 0.9426, 'drop_rate': 0.1604}
+django__django-11039 {'tokens': 82671, 'ctx': 32768, 'windows': 8, 'window': 128, 'assistant_tokens': 793, 'kl_mean': 0.0923, 'kl_p99': 1.2533, 'top1': 0.966, 'drop_rate': 0.1193}
+{
+ "sessions": 5,
+ "kl_mean": 0.14615527067251763,
+ "kl_p99_max": 4.161206493377615,
+ "top1": 0.9367764915405165,
+ "drop_rate": 0.1401886768830128,
+ "passes": false
+}

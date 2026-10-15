@@ -112,6 +112,8 @@ with `--slots 64`; its default is unchanged.
   64 slots.
 - **Lowering the sync floor further** would need a redesign that routes on the
   GPU. `mx.compile` was assessed and ruled out (results.md, "The sync floor").
+  The lossy drop-on-miss variant failed the quality gate (KL 0.146, top-1
+  0.937; `results/drop_sim.json`).
 - **The serving path end to end** with the cap and 64 slots: a `pool` agent
   session through `serve_streaming`.
 - **Speed variance.** Each row is a single run, and some ran alongside video
