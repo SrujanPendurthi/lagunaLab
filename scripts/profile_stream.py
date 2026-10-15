@@ -3,7 +3,7 @@
 python3 -m scripts.profile_stream              # pruned-50 pack, slots=32, at short and 32k context
 python3 -m scripts.profile_stream --resident   # same, pruned-50 fully resident: no sync, no loads
 python3 -m scripts.profile_stream --slots 16 32 64 128   # slot sweep, fresh model per count, 1 GB pool cap
-python3 -m scripts.profile_stream --slots 64 --async-dispatch   # same sweep row with async expert dispatch
+python3 -m scripts.profile_stream --slots 64 --async-ab   # async_dispatch off then on, fresh model each, tokens checked
 python3 -m scripts.profile_stream --split      # force slot writes to finish inside load (write_ms); adds 32k with pre-read expert files
 
   sync_ms   time blocked in np.array(indices): the GPU finishing everything queued
@@ -129,23 +129,30 @@ def main():
     p.add_argument("--resident", action="store_true")
     p.add_argument("--split", action="store_true")
     p.add_argument("--slots", type=int, nargs="+")
-    p.add_argument("--async-dispatch", action="store_true")
+    p.add_argument("--async-ab", action="store_true")
     a = p.parse_args()
     laguna_mlx.wire_resident(a.resident)
     ids = np.load(SESSION)["ids"]
     res = json.loads(OUT.read_text()) if OUT.exists() else {}
     save = lambda: OUT.write_text(json.dumps(res, indent=1))  # after every row: a kill keeps finished rows
-    streaming.StreamingSwitchGLU.async_dispatch = a.async_dispatch
     if a.slots:
-        rows = res["sweep_capped_async" if a.async_dispatch else "sweep_capped"] = []
+        key = "async_ab" if a.async_ab else "sweep_capped"
+        rows = res[key] = []
         for n in a.slots:
-            model = streaming.load_streaming(PACK, n, cache_limit_gb=1.0)[0]
-            for ctx in (256, 32768):
-                rows.append({"slots": n, **profile(model, ids[:ctx])})
-                _show(rows[-1])
-                save()
-            del model
-            mx.clear_cache()  # one model at a time
+            for on in ((False, True) if a.async_ab else (False,)):
+                streaming.StreamingSwitchGLU.async_dispatch = on
+                model = streaming.load_streaming(PACK, n, cache_limit_gb=1.0)[0]
+                for ctx in (256, 32768):
+                    rows.append({"slots": n, "async_dispatch": on, **profile(model, ids[:ctx])})
+                    _show(rows[-1])
+                    save()
+                del model
+                mx.clear_cache()  # one model at a time
+        if a.async_ab:
+            pair = lambda on: [r["tokens"] for r in rows if r["async_dispatch"] == on]
+            res["async_ab_tokens_identical"] = pair(False) == pair(True)
+            print("tokens identical:", res["async_ab_tokens_identical"], flush=True)
+            save()
         return
     model = load(MODEL)[0] if a.resident else streaming.load_streaming(PACK, 32, cache_limit_gb=1.0)[0]
     runs = [(256, None), (32768, None)] + ([(32768, PACK)] if a.split else [])

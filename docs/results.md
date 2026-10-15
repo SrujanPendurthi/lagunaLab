@@ -503,8 +503,9 @@ Candidates:
 | D | Skip the sync entirely when slots = experts (static table) | Removes the floor, but needs 12.2 GB, more than the resident pruned model's 10.1 GB, which is faster anyway | Pointless |
 | E | Route one layer ahead (prefetch) | Break-even in moeStream's measurements | Already rejected |
 
-To measure A: `profile_stream --slots 64 --async-dispatch`. It writes
-`sweep_capped_async`, to compare against the 64-slot rows of `sweep_capped`.
+To measure A: `profile_stream --slots 64 --async-ab`. It runs with async off,
+then on, in one process, with a fresh model each. Results go to `async_ab`, and
+the token check to `async_ab_tokens_identical`.
 
 ## Open items
 
