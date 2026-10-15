@@ -101,7 +101,7 @@ live on the SSD.
   one file per MoE layer with every expert's quantized bytes at a fixed stride
   (`layout.json` describes it). Bytes are copied exactly; nothing is
   re-quantized.
-- **Load** (`load_streaming(pack_dir, slots)`). Builds the model, swaps each
+- **Load** (`load_streaming(pack_dir, slots, cache_limit_gb=None)`). Builds the model, swaps each
   layer's `switch_mlp` for a `StreamingSwitchGLU` backed by an `ExpertStore`
   holding `slots` experts, and loads the resident weights.
 - **Per forward** (`StreamingSwitchGLU.__call__`): sync the router indices to
@@ -111,6 +111,10 @@ live on the SSD.
   - Misses are read with parallel `os.pread` from an 8-thread pool.
   - A prefill chunk needing more experts than there are slots runs several
     masked passes (a `ponytail` note marks this ceiling).
+- **Buffer-pool cap.** Pass `cache_limit_gb=1.0` for real runs. Uncapped,
+  MLX's free-buffer pool grows during long prefills and pushes the expert files
+  out of the macOS page cache, which doubled the 32k decode step (results.md,
+  S5).
 - **Lossless.** Same bits, same weights, same kernels: streamed logits match
   resident within 1e-5 in the tiny tests. On real weights, greedy outputs can
   still differ at exact bf16 ties, because the summation order across experts

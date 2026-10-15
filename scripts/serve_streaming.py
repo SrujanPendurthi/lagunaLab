@@ -65,7 +65,7 @@ server.APIHandler.setup = _setup
 
 
 def _load(*a, **k):
-    model, tok = load_streaming(PACK, slots)
+    model, tok = load_streaming(PACK, slots, cache_limit_gb=1.0)
     # generation_config.json's eos_token_id is [2, 24]: 2 is the real EOS,
     # 24 is "</assistant>" (end of turn in this chat template). mlx-lm's
     # tokenizer wrapper only infers the single HF eos_token (id 2) from

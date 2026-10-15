@@ -95,3 +95,18 @@ def test_streaming_matches_resident_on_sorted_switchglu_path(tmp_path):
     streamed, _ = load_streaming(out, slots=3)
     ids = _ids(48, seed=8)  # 48 tokens * top-2 = 96 >= 64: SwitchGLU sorts indices
     np.testing.assert_allclose(np.array(streamed(ids)), np.array(resident(ids)), atol=1e-5, rtol=1e-5)
+
+
+def test_cache_limit_gb_is_opt_in(tmp_path):
+    # default None leaves MLX's buffer-pool limit alone (moeStream's numbers keep their meaning)
+    d, _ = quantized_model_dir(tmp_path)
+    out = tmp_path / "packed"
+    pack(d, out)
+    before = mx.set_cache_limit(123 << 20)
+    try:
+        load_streaming(out, slots=3)
+        assert mx.set_cache_limit(123 << 20) == 123 << 20
+        load_streaming(out, slots=3, cache_limit_gb=0.5)
+        assert mx.set_cache_limit(123 << 20) == int(0.5 * (1 << 30))
+    finally:
+        mx.set_cache_limit(before)

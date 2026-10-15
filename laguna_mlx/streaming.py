@@ -99,8 +99,13 @@ class StreamingSwitchGLU(nn.Module):
         return out
 
 
-def load_streaming(pack_dir, slots):
+def load_streaming(pack_dir, slots, cache_limit_gb=None):
+    """cache_limit_gb caps MLX's free-buffer pool. Uncapped, the pool pushed expert files out of
+    the page cache and halved 32k decode speed (results.md, S5). None leaves the limit alone."""
     from mlx_lm.utils import load_tokenizer
+
+    if cache_limit_gb is not None:
+        mx.set_cache_limit(int(cache_limit_gb * (1 << 30)))
 
     pack_dir = Path(pack_dir)
     config = json.loads((pack_dir / "config.json").read_text())

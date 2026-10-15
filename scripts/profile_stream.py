@@ -129,12 +129,10 @@ def main():
     a = p.parse_args()
     if a.resident:  # streaming fits without it; a max wired limit starves the rest of the machine
         mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
-    else:  # ponytail: 1 GB free-buffer pool; the uncapped pool took the footprint to the 14 GB watchdog at 32k prefill
-        mx.set_cache_limit(1 << 30)
     ids = np.load(SESSION)["ids"]
     res = json.loads(OUT.read_text()) if OUT.exists() else {}
     save = lambda: OUT.write_text(json.dumps(res, indent=1))  # after every row: a kill keeps finished rows
-    model = load(MODEL)[0] if a.resident else streaming.load_streaming(PACK, 32)[0]
+    model = load(MODEL)[0] if a.resident else streaming.load_streaming(PACK, 32, cache_limit_gb=1.0)[0]
     runs = [(256, None), (32768, None)] + ([(32768, PACK)] if a.split else [])
     rows = []
     if a.resident:

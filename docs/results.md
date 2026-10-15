@@ -415,10 +415,13 @@ true`).
 
 ## Open items
 
-- **S5 follow-up: apply the 1 GB MLX pool cap to streaming generally.** It
-  doubled 32k decode in the profile. Batched slot writes were measured and
-  dropped. This touches `load_streaming`, which moeStream uses, so it needs a
-  decision.
+- **S5 follow-up: the MLX pool cap is opt-in.**
+  - `load_streaming(pack_dir, slots, cache_limit_gb=None)`. The default leaves
+    MLX's limit alone, so moeStream's imports and past numbers are unchanged.
+  - `serve_streaming` and `profile_stream` pass 1.0.
+  - The other benchmarks still run uncapped, matching their recorded results.
+    Rerunning `bench_kv --target streaming` with the cap would update the
+    16 GB answer's decode number.
 - **Task 11: mlx-lm upstream PR** adding Laguna. Not filed; it is
   outward-facing, so it needs a human go-ahead.
 - **Prompt lookup:** keep/drop decision not recorded (see above).
