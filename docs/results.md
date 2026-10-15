@@ -264,11 +264,46 @@ the machine into a watchdog reboot. `DequantKVCache` replaced that path, and
 
 ---
 
+## Streaming decode profile (Task S5)
+
+Source: `results/stream_profile.json`. Pruned-50 pack, 32 slots, 32 greedy
+decode steps after a prefix of the longest session. All times are ms per
+decode step.
+
+| Context | tok/s | Step | Router sync | Expert load (wall) | pread (thread-summed) | Other | Hit rate | Misses/step |
+|---|---|---|---|---|---|---|---|---|
+| 256 | 18.2 | 54.9 | 34.5 (63%) | 16.2 (30%) | 26.0 | 4.1 | 0.73 | 84 |
+| 32,768 | 5.9 | 169.9 | 98.6 (58%) | 65.4 (38%) | 154.4 | 5.9 | 0.70 | 95 |
+
+How to read the columns:
+
+- **Router sync** is time blocked in `np.array(indices)`. It includes the GPU
+  finishing all queued work (attention and the previous layers), so it bundles
+  real compute with round-trip stalls. That's why it triples at 32k: the
+  full-attention layers have more context to attend over.
+- **Expert load** covers slot bookkeeping, preads and slot writes. pread time is
+  summed across 8 threads, so it can exceed wall time.
+
+Readings:
+
+- **Sync is the largest bucket in both runs.** The brief's rule therefore points
+  at overlapping the host round-trip.
+- **This profile can't split sync into GPU compute and stall.** The rough split
+  below compares numbers from two different scripts, so treat it as an
+  estimate: the pruned resident model decodes at 38.7 tok/s (25.9 ms/step,
+  `prune_point.json`). That would leave about 13 ms/step of sync stall and
+  16 ms/step of loading at short context.
+- **Loading costs 4× more per step at 32k, for similar miss counts.** Per-miss
+  pread time rose about 5×. Not investigated; one possibility is expert pages
+  falling out of the macOS page cache as the KV cache grows.
+
 ## Open items
 
-- **Task S5: streaming decode profile.** `scripts/profile_stream.py` is written
-  and tested; the real run writes `results/stream_profile.json`. It decides the
-  next speed fix: overlapping the router sync vs. vectorizing slot bookkeeping.
+- **S5 follow-up:** pick the fix. Candidates are prefetching the next layer's
+  experts from speculative routing (hides both the stall and the load), or
+  keeping the expert→slot table on the GPU so steps without misses don't sync.
+  A resident run of the same profile would separate GPU compute from stall
+  first.
 - **Task 11: mlx-lm upstream PR** adding Laguna. Not filed; it is
   outward-facing, so it needs a human go-ahead.
 - **Prompt lookup:** keep/drop decision not recorded (see above).
