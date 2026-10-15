@@ -89,6 +89,7 @@ model, tok = load_streaming("models/Laguna-XS-2.1-pruned-50-packed", slots=32)
   caches and the replay metric work, and why they are built that way.
 - [docs/results.md](docs/results.md): all findings for Parts 1–3, with sources.
 - [docs/part3-answer.md](docs/part3-answer.md): the 16 GB recommendation and what is unmeasured.
+- [docs/gpu-side-routing.md](docs/gpu-side-routing.md): design note for removing the per-layer sync (proposal).
 - [docs/runbook.md](docs/runbook.md): reproducing everything, machine-safety rules,
   and known gotchas.
 - `docs/superpowers/specs/` and `docs/superpowers/plans/`: the original design
