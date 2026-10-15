@@ -23,6 +23,9 @@ _POOL = ThreadPoolExecutor(8)
 class ExpertStore:
     """Slots for one layer: a quantized SwitchGLU with `slots` experts, refilled from disk."""
 
+    # ponytail: A/B switch for Task S5 (one scatter per tensor vs one per expert); drop the loser once measured
+    batch_writes = False
+
     def __init__(self, pack_dir, layout, layer, slots, group_size, bits, hidden, inter):
         self.layout, self.slots = layout, slots
         self.fd = os.open(Path(pack_dir) / "experts" / f"layer_{layer:02d}.bin", os.O_RDONLY)
@@ -58,15 +61,23 @@ class ExpertStore:
         self.freq[list(experts)] += 1
         self.last[list(experts)] = self.clock
         if missing:
+            slots, parts = [], []
             for slot, (e, buf) in zip(self._victims(len(missing), keep), _POOL.map(self._read, missing)):
                 old = self.slot_expert[slot]
                 if old != -1:
                     del self.expert_slot[old]
                 self.slot_expert[slot], self.expert_slot[e] = e, slot
                 self.bytes_read += len(buf)
-                for name, arr in expert_from_bytes(buf, self.layout).items():
-                    proj, part = name.split(".")
-                    getattr(getattr(self.glu, proj), part)[slot] = arr
+                slots.append(slot)
+                parts.append(expert_from_bytes(buf, self.layout))
+            for name in parts[0]:
+                proj, part = name.split(".")
+                param = getattr(getattr(self.glu, proj), part)
+                if self.batch_writes:
+                    param[mx.array(slots)] = mx.stack([p[name] for p in parts])
+                else:
+                    for slot, p in zip(slots, parts):
+                        param[slot] = p[name]
         return {e: self.expert_slot[e] for e in experts}
 
 

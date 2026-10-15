@@ -27,3 +27,15 @@ def test_profile_runs_on_a_resident_model():
     m = mlx_only_model()
     r = profile(m, np.arange(20) % TINY["vocab_size"], n=3, chunk=8)
     assert r["sync_ms"] == 0 and r["load_ms"] == 0 and r["misses_per_step"] == 0 and r["step_ms"] > 0
+
+
+def test_split_times_slot_writes_and_warm_reads_the_pack(tmp_path):
+    d, _ = quantized_model_dir(tmp_path)
+    pack(d, tmp_path / "packed")
+    ids = np.random.default_rng(0).integers(0, TINY["vocab_size"], size=40)
+    plain = profile(streaming.load_streaming(tmp_path / "packed", slots=3)[0], ids, n=6, chunk=16)
+    split = profile(streaming.load_streaming(tmp_path / "packed", slots=3)[0], ids, n=6, chunk=16,
+                    split=True, warm_pack=tmp_path / "packed")
+    assert plain["write_ms"] == 0 and not plain["warm"]
+    assert split["write_ms"] > 0 and split["warm"]
+    assert split["tokens"] == plain["tokens"] and len(plain["tokens"]) == 6  # timing never changes outputs

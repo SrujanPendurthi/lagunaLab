@@ -95,3 +95,24 @@ def test_streaming_matches_resident_on_sorted_switchglu_path(tmp_path):
     streamed, _ = load_streaming(out, slots=3)
     ids = _ids(48, seed=8)  # 48 tokens * top-2 = 96 >= 64: SwitchGLU sorts indices
     np.testing.assert_allclose(np.array(streamed(ids)), np.array(resident(ids)), atol=1e-5, rtol=1e-5)
+
+
+def test_batched_slot_writes_are_bit_exact(tmp_path, monkeypatch):
+    # one scatter per tensor per layer instead of one per missing expert: same bits out
+    from laguna_mlx.streaming import ExpertStore
+
+    d, _ = quantized_model_dir(tmp_path, dtype=mx.bfloat16)
+    out = tmp_path / "packed"
+    pack(d, out)
+    ids = _ids(16, seed=7)
+
+    def run(batched):
+        monkeypatch.setattr(ExpertStore, "batch_writes", batched)
+        streamed, _ = load_streaming(out, slots=3)
+        cache = streamed.make_cache()
+        got = [streamed(ids[:, :10], cache=cache)]
+        got += [streamed(ids[:, i : i + 1], cache=cache) for i in range(10, 16)]
+        assert stream_stats(streamed)["misses"] > 3
+        return mx.concatenate(got, axis=1)
+
+    assert mx.array_equal(run(True), run(False)).item()
