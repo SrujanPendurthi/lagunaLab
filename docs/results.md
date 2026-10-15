@@ -320,13 +320,34 @@ Here "everything else" means streaming step − resident step − expert load.
   guesses, rejected by its tuner in 6 of 8 A/B pairs. These are moeStream's
   numbers, not in this repo's `results/`.
 
+### Fix options (for a human pick; nothing run)
+
+Streaming adds 31.7 ms/step at 256 context and 123.1 ms at 32k, about half
+expert loading and half everything else. Already ruled out: prefetch (about
+break-even in moeStream) and skipping the sync (almost every layer misses).
+
+One more measured fact matters here. In the full-model slot sweep
+(`results/streaming.json`, short prompts), going from 16 to 128 slots cut
+misses 2.6× (110,906 to 42,928) but decode didn't improve: 10.65, 10.05, 9.92,
+9.68 tok/s. So per-step cost isn't driven by miss count alone. One explanation
+that fits: each slot write (`param[slot] = arr`, 9 writes per miss) may copy
+the whole slot bank, which grows with slot count (32 slots × 1.77 MB per
+expert ≈ 57 MB per layer). That is a hypothesis, not a measurement.
+
+| # | Option | Expected gain | Cost / risk |
+|---|---|---|---|
+| 1 | **Split the load and other buckets** (time preads apart from slot writes; force-eval the writes; compare a cold run with a pre-warmed 32k run) | None directly; it tells which of 2–4 is real | ~1 h code, ~15 min GPU. No risk |
+| 2 | **Batch slot writes**: one scatter per tensor per layer, not 9 per miss | If the copy hypothesis holds: part of the load bucket (16.2 / 65.4 ms) and part of "everything else" (15.6 / 57.7 ms). Zero if it doesn't | ~10 lines in `ExpertStore.load`, lossless, covered by the tiny streaming tests. Low risk |
+| 3 | **More slots** (64 of the pruned model's 128) | Fewer misses, but the full-model sweep says ~0 decode gain unless 2 lands first | No code; more memory per layer |
+| 4 | **Long-context growth** (load ×4 per step for similar misses; other ×3.7) | Up to ~90 ms/step at 32k if it fell back to the 256 cost | Cause unknown (page cache eviction is the suspect); can't size it without 1 |
+
+**Recommendation:** do 1, then 2 if the slot-write cost shows up. They're one
+small job. Hold 3 until after 2. Size 4 from 1's warm/cold comparison.
+
 ## Open items
 
-- **S5 follow-up: no fix picked yet.** Prefetch is about break-even (moeStream),
-  and sync-skipping can't trigger at this miss rate. The remaining levers are
-  fewer misses (more slots; the pruned model has 128 experts per layer) and
-  finding what makes the non-load overhead grow with context. Slot-write
-  copies and the page cache are the first suspects.
+- **S5 follow-up: no fix picked yet.** See "Fix options" above; recommendation
+  is to measure first (option 1), then batch slot writes (option 2).
 - **Task 11: mlx-lm upstream PR** adding Laguna. Not filed; it is
   outward-facing, so it needs a human go-ahead.
 - **Prompt lookup:** keep/drop decision not recorded (see above).
