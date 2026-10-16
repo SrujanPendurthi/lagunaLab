@@ -2,6 +2,7 @@
 
 python3 -m scripts.serve_streaming --slots 32 --port 8081 \
     --prompt-cache-size 6 --prompt-cache-bytes 4294967296 --max-tokens 4096
+python3 -m scripts.serve_streaming --preset laptop16 --port 8081   # the Part 3 answer (docs/part3-answer.md)
 mlx-lm infers the GLM-4.7 tool parser from Laguna's chat template (<arg_key> tags).
 
 --prompt-cache-size 2 (the original plan) evicts the growing conversation's
@@ -25,6 +26,17 @@ from laguna_mlx.streaming import load_streaming
 
 PACK = "models/Laguna-XS-2.1-packed"
 slots = 32
+pack = PACK
+cache_limit_gb = 1.0
+# KV cache: the server uses model.make_cache(), the plain cache, in every configuration.
+PRESETS = {
+    # Part 3 answer: 10.16 GB peak, 6.87 tok/s decode at 82,671 tokens (results/kv.json).
+    # ponytail: the prompt-cache limits are the ones pool ran with on 24 GB; their memory on
+    # a 16 GB Mac isn't measured (serve end-to-end is an open item). Explicit flags win.
+    "laptop16": {"pack": "models/Laguna-XS-2.1-pruned-50-packed", "slots": 64, "cache_limit_gb": 1.0,
+                 "server_args": {"--max-tokens": "4096", "--prompt-cache-size": "6",
+                                 "--prompt-cache-bytes": "4294967296"}},
+}
 
 
 class _DropKeepalive:
@@ -66,21 +78,38 @@ server.APIHandler.setup = _setup
 
 
 def _load(*a, **k):
-    model, tok = load_streaming(PACK, slots, cache_limit_gb=1.0)
+    model, tok = load_streaming(pack, slots, cache_limit_gb=cache_limit_gb)
     # generation_config.json's eos_token_id is [2, 24]: 2 is the real EOS,
     # 24 is "</assistant>" (end of turn in this chat template). mlx-lm's
     # tokenizer wrapper only infers the single HF eos_token (id 2) from
     # tokenizer_config.json, so without this the model never stops on 24 and
     # repeats "</assistant>" until max_tokens. Small wrapper fix, not a parser.
-    gen_cfg = json.loads((Path(PACK) / "generation_config.json").read_text())
+    gen_cfg = json.loads((Path(pack) / "generation_config.json").read_text())
     for eid in gen_cfg.get("eos_token_id", []):
         if eid not in tok.eos_token_ids:
             tok.add_eos_token(str(eid))
     return model, tok
 
 
+def apply_preset(argv):
+    """Pop `--preset NAME` from argv, set the module config, and add its server flags that argv
+    doesn't already set. Returns the resolved config."""
+    global pack, slots, cache_limit_gb
+    if "--preset" not in argv:
+        return None
+    i = argv.index("--preset")
+    p = PRESETS[argv[i + 1]]
+    del argv[i : i + 2]
+    pack, slots, cache_limit_gb = p["pack"], p["slots"], p["cache_limit_gb"]
+    for flag, value in p["server_args"].items():
+        if flag not in argv:
+            argv += [flag, value]
+    return {**p, "server_args": {f: argv[argv.index(f) + 1] for f in p["server_args"]}}
+
+
 def main():
     global slots
+    preset = apply_preset(sys.argv)
     if "--slots" in sys.argv:
         i = sys.argv.index("--slots")
         slots = int(sys.argv[i + 1])
@@ -90,7 +119,9 @@ def main():
     # need it, and it pins memory the rest of the machine needs (it stalled video playback)
     server.mx = mx_without_wired_limit()
     if "--model" not in sys.argv:
-        sys.argv += ["--model", PACK]
+        sys.argv += ["--model", pack]
+    print(f"serve_streaming: pack={pack} slots={slots} cache_limit_gb={cache_limit_gb} kv=plain"
+          + (f" preset={preset['server_args']}" if preset else ""), flush=True)
     server.main()
 
 
