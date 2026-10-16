@@ -77,19 +77,33 @@ class DequantKVCache(_BaseCache):
     every token (~0.34 GB written per full-attention layer at 82k).
     """
 
-    def __init__(self, group_size=64, bits=8, quantized_decode=False):
+    def __init__(self, group_size=64, bits=8, quantized_decode=False, fused_decode=False):
+        if fused_decode and (bits, group_size) != (8, 64):
+            raise ValueError("fused_decode needs 8-bit, group_size 64")
         self.q = QuantizedKVCache(group_size=group_size, bits=bits)
         self.quantized_decode = quantized_decode
+        self.fused_decode = fused_decode
         self._quantized_step = False
+        self.fused_step = False
 
     def update_and_fetch(self, keys, values):
         qk, qv = self.q.update_and_fetch(keys, values)
+        # Attention checks `fused_step` and then calls attend(); the K/V returned are unused
+        self.fused_step = self.fused_decode and keys.shape[2] == 1
+        if self.fused_step:
+            return qk, qv
         # the attention call reads `bits` right after this, on the same layer's cache
         self._quantized_step = self.quantized_decode and keys.shape[2] == 1
         if self._quantized_step:
             return qk, qv
         g, b = self.q.group_size, self.q.bits
         return mx.dequantize(*qk, group_size=g, bits=b), mx.dequantize(*qv, group_size=g, bits=b)
+
+    def attend(self, queries, scale):
+        """Single-token attention straight off the packed cache (laguna_mlx.q8_attn)."""
+        from laguna_mlx.q8_attn import q8_decode_attention
+
+        return q8_decode_attention(queries, self.q.keys, self.q.values, self.q.offset, scale)
 
     @property
     def bits(self):
@@ -130,13 +144,14 @@ class DequantKVCache(_BaseCache):
         return self.q.nbytes
 
 
-def make_quantized_cache(model, bits=8, group_size=64, quantized_decode=False):
+def make_quantized_cache(model, bits=8, group_size=64, quantized_decode=False, fused_decode=False):
     """Quantized KV storage on full-attention layers; sliding layers keep their window."""
     a = model.args
     if a.head_dim % group_size:
         raise ValueError(f"head_dim {a.head_dim} is not a multiple of group_size {group_size}")
     return [
         RotatingKVCache(max_size=a.sliding_window)
-        if lt == "sliding_attention" else DequantKVCache(group_size=group_size, bits=bits, quantized_decode=quantized_decode)
+        if lt == "sliding_attention" else DequantKVCache(group_size=group_size, bits=bits, quantized_decode=quantized_decode,
+                                                       fused_decode=fused_decode)
         for lt in a.layer_types
     ]

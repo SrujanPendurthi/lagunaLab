@@ -3,7 +3,7 @@
 python3 -m scripts.bench_kv                    # resident: plain, 8-bit, 4-bit on 5 django sessions
 python3 -m scripts.bench_kv --target streaming # step 0 only: plain cache, longest session
 python3 -m scripts.bench_kv --target streaming --slots 64 --cache-limit-gb 1.0   # own rows
-python3 -m scripts.bench_kv --qdecode off|on   # 8-bit decode A/B on the longest session (results/kv_qdecode.json)
+python3 -m scripts.bench_kv --qdecode off|on|fused --out results/kv_qdecode_off.json   # 8-bit decode A/B, longest session
 Resumable: finished rows in results/kv.json are skipped.
 """
 import argparse
@@ -122,14 +122,16 @@ def _save(res, out):
     tmp.replace(out)  # atomic: an interrupt never leaves a half-written file
 
 
-def qdecode_ab(model, ref, quantized_decode, out=QD_OUT, decode_n=64):
-    """8-bit KV decode on one session with `DequantKVCache(quantized_decode=...)` off ("8") or
-    on ("8q"). Prefill is identical either way (only L==1 steps change), so no replay score."""
+def qdecode_ab(model, ref, quantized_decode, out=QD_OUT, decode_n=64, fused=False):
+    """8-bit KV decode on one session: dequantize ("8"), mlx-lm's quantized SDPA ("8q",
+    quantized_decode) or the fused kernel ("8f", fused_decode). Prefill is identical in all
+    three (only L==1 steps change), so no replay score."""
     out = Path(out)
     res = json.loads(out.read_text()) if out.exists() else {"rows": {}}
-    key = f"resident/8{'q' if quantized_decode else ''}/{ref.stem}"
+    key = f"resident/8{'f' if fused else 'q' if quantized_decode else ''}/{ref.stem}"
     if key not in res["rows"]:
-        mk = lambda: make_quantized_cache(model, 8, quantized_decode=quantized_decode)  # noqa: E731
+        mk = lambda: make_quantized_cache(model, 8, quantized_decode=quantized_decode,  # noqa: E731
+                                          fused_decode=fused)
         res["rows"][key] = {"tokens": int(len(np.load(ref)["ids"])),
                             **decode_at_ctx(model, np.load(ref)["ids"], mk, n=decode_n)}
         a, b = (res["rows"].get(f"resident/{k}/{ref.stem}") for k in ("8", "8q"))
@@ -157,13 +159,14 @@ def main():
     p.add_argument("--target", choices=["resident", "streaming"], default="resident")
     p.add_argument("--slots", type=int, default=32)
     p.add_argument("--cache-limit-gb", type=float)
-    p.add_argument("--qdecode", choices=["off", "on"], help="resident 8-bit decode A/B, longest session only")
+    p.add_argument("--qdecode", choices=["off", "on", "fused"], help="resident 8-bit decode A/B, longest session only")
+    p.add_argument("--out", type=Path, default=QD_OUT, help="--qdecode only")
     a = p.parse_args()
     wire_resident(a.target == "resident")
     if a.qdecode:
         refs = sorted(REFS.glob("*.npz"), key=lambda r: len(np.load(r)["ids"]))
         model, _ = load(MODEL)
-        res = qdecode_ab(model, refs[-1], a.qdecode == "on")
+        res = qdecode_ab(model, refs[-1], a.qdecode == "on", a.out, fused=a.qdecode == "fused")
         print({k: v for k, v in res.items() if k != "rows"})
         return
     if a.target == "resident":

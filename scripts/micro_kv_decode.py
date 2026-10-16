@@ -2,7 +2,8 @@
 
 python3 -m scripts.micro_kv_decode
 Compares, per token: plain bf16 K/V + fused SDPA; 8-bit cache dequantized then fused SDPA
-(DequantKVCache today); 8-bit cache read by mlx-lm's quantized SDPA (quantized_decode=True).
+(DequantKVCache today); 8-bit cache read by mlx-lm's quantized SDPA (quantized_decode=True);
+8-bit cache read by the fused Metal kernel (fused_decode=True, laguna_mlx.q8_attn).
 No weights; under 1 GB at the longest context.
 """
 import json
@@ -12,7 +13,9 @@ from pathlib import Path
 import mlx.core as mx
 from mlx_lm.models.base import quantized_scaled_dot_product_attention
 
-OUT = Path("results/kv_decode_micro.json")
+from laguna_mlx.q8_attn import q8_decode_attention
+
+OUT = Path("results/kv_decode_micro_fused.json")  # kv_decode_micro.json is the run before the fused kernel
 HQ, HKV, D, G, BITS, N = 48, 8, 128, 64, 8, 50
 
 
@@ -39,6 +42,7 @@ def main():
             "dequant_sdpa_ms": bench(lambda: mx.fast.scaled_dot_product_attention(q, deq(qk), deq(qv), scale=s, mask=None)),
             "dequant_only_ms": bench(lambda: (deq(qk), deq(qv))),
             "quantized_sdpa_ms": bench(lambda: quantized_scaled_dot_product_attention(q, qk, qv, scale=s, mask=None, group_size=G, bits=BITS)),
+            "fused_q8_ms": bench(lambda: q8_decode_attention(q, qk, qv, ctx, s)),
             "bf16_kv_gb": (k.nbytes + v.nbytes) / 1e9,
             "q8_kv_gb": sum(a.nbytes for a in (*qk, *qv)) / 1e9,
         }

@@ -93,3 +93,10 @@ def test_qdecode_ab_rows_and_comparison(tok, traces, tmp_path):
     assert set(res["rows"]) == {"resident/8/long", "resident/8q/long"}
     assert len(res["rows"]["resident/8q/long"]["decode_tokens"]) == 4
     assert isinstance(res["tokens_identical"], bool) and res["speedup"] > 0
+
+
+def test_qdecode_ab_fused_row(tok, traces, tmp_path):
+    m = mlx_only_model(head_dim=128)
+    refs = bench_kv.build_refs(m, tok, traces, tmp_path / "refs", cap=4096)
+    res = bench_kv.qdecode_ab(m, refs[-1], False, tmp_path / "f.json", decode_n=4, fused=True)
+    assert list(res["rows"]) == ["resident/8f/long"]

@@ -101,7 +101,10 @@ class Attention(nn.Module):
         k = self.rope(k, offset=offset)
         if cache is not None:
             k, v = cache.update_and_fetch(k, v)
-        out = scaled_dot_product_attention(q, k, v, cache=cache, scale=self.scale, mask=mask)
+        if getattr(cache, "fused_step", False):  # DequantKVCache(fused_decode=True), one token
+            out = cache.attend(q, self.scale)
+        else:
+            out = scaled_dot_product_attention(q, k, v, cache=cache, scale=self.scale, mask=mask)
         out = out.transpose(0, 2, 1, 3)  # B, L, H, D
         gate = nn.softplus(self.g_proj(x).astype(mx.float32)).astype(out.dtype)
         gate = gate[..., None] if self.per_head_gate else gate.reshape(B, L, self.n_heads, -1)
