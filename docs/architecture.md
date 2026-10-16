@@ -34,7 +34,7 @@ it. "Real weights" means the script loads a real checkpoint and must run under
 |---|---|---|
 | `__init__.py` | Importing it registers `model_type: "laguna"` with mlx-lm, so stock `mlx_lm.load` / `convert` / `server` work. Also `wire_resident(resident)`, which raises MLX's wired limit only for a fully resident model, and `mx_without_wired_limit()`, an `mlx.core` stand-in whose `set_wired_limit` is a no-op (see "Wired limit") | every script; moeStream |
 | `laguna.py` | The model port: `ModelArgs`, `Attention`, `MLP`, `SparseMoeBlock` (with `route()`), `DecoderLayer`, `LagunaModel` (with layer-output `capture`), `Model` (`make_cache`, `sanitize`, `quant_predicate`) | everything; moeStream (rule 3) |
-| `streaming.py` | SSD expert streaming: `ExpertStore` (slot bank per layer), `StreamingSwitchGLU` (replaces each MoE layer's `switch_mlp`), `load_streaming(pack_dir, slots, cache_limit_gb=None)`, `stream_stats(model)` | `serve_streaming`, `bench_*`, `profile_stream`, `sim_drop`, `diag_dflash`; moeStream (rules 3, 9) |
+| `streaming.py` | SSD expert streaming: `ExpertStore` (slot bank per layer), `StreamingSwitchGLU` (replaces each MoE layer's `switch_mlp`), `load_streaming(pack_dir, slots, cache_limit_gb=None)`, `stream_stats(model)` | `serve_streaming`, `bench_*`, `profile_stream`, `diag_dflash`; moeStream (rules 3, 9) |
 | `cache.py` | `TrimmableWindowCache` / `make_trimmable_cache` (speculative decoding), `DequantKVCache` / `make_quantized_cache` (Part 3, with the `quantized_decode` and `fused_decode` switches) | `dflash.py`, `bench_kv`, `micro_kv_decode`, `serve_streaming`; moeStream (rule 7) |
 | `q8_attn.py` | `q8_decode_attention(q, keys, values, n, scale)`: the fused 8-bit KV single-token attention kernel (`mx.fast.metal_kernel`) | `DequantKVCache.attend`, `micro_kv_decode` |
 | `pruning.py` | Part 2: `ExpertSaliencyRecorder`, `accumulate`, `load_stats`, `scores`, `keep_sets`, `apply_mask`, `prune_checkpoint` | `prune_sweep`, `prune_point` |
@@ -75,11 +75,10 @@ Run every one as `python3 -m scripts.<name>` from the repo root.
 | `bench_kv.py` | 3 | yes | KV quantization sweep (resident/streaming), `--qdecode plain/off/on/fused` decode A/B | `results/kv.json`, `kv_qdecode_*.json`, `kv_stream_*.json`, `refs/kv/` |
 | `micro_kv_decode.py` | 3 | no (synthetic, GPU) | one layer's decode attention: plain, dequantize, quantized SDPA, fused kernel | `results/kv_decode_micro_fused.json` (older run: `kv_decode_micro.json`) |
 | `profile_stream.py` | S5 | yes | where a streaming decode step goes: sync, load, pread, writes; slot sweep; async A/B | `results/stream_profile.json` |
-| `sim_drop.py` | S5 | yes | drop-on-miss quality simulation | `results/drop_sim.json` |
 
 ### `tests/`
 
-`python3 -m pytest -q` collects 188 tests (165 test functions, some
+`python3 -m pytest -q` collects 183 tests (160 test functions, some
 parametrized) and runs in ~25 s on tiny random-weight models. No real weights.
 
 | File | Covers |
@@ -96,7 +95,7 @@ parametrized) and runs in ~25 s on tiny random-weight models. No real weights.
 | `test_replay.py` | self-score is perfect and chunking-invariant; perturbation scores worse; truncation; cache factory; `forward=`; public `greedy_actions` |
 | `test_session.py` | wire-format normalization, last-request selection, assistant mask, truncation flag, tokenizer wrapper |
 | `test_dflash.py` | DFlash and lookup are lossless (random and oracle drafts, EOS and max-tokens mid-block); `NgramIndex` |
-| `test_bench_kv.py`, `test_bench_lookup.py`, `test_profile_stream.py`, `test_sim_drop.py`, `test_diag_dflash.py`, `test_diag_actions.py`, `test_lookup_acceptance.py`, `test_overnight.py` | dry runs of each real-weight script on the tiny model, resume logic, arithmetic |
+| `test_bench_kv.py`, `test_bench_lookup.py`, `test_profile_stream.py`, `test_diag_dflash.py`, `test_diag_actions.py`, `test_lookup_acceptance.py`, `test_overnight.py` | dry runs of each real-weight script on the tiny model, resume logic, arithmetic |
 | `test_proxy.py` | proxy forwards streams, logs errors, survives client disconnects |
 | `test_serve_preset.py` | `--preset laptop16` resolution, explicit flags win, `--fused-decode` swaps the cache |
 | `test_wired.py` | wired limit only for resident models; `serve_streaming` keeps mlx-lm's server off it |
@@ -290,8 +289,8 @@ Other details of `StreamingSwitchGLU`:
 - **Prefill slot writes are evaluated** (`mx.async_eval` on the slot tensors
   after every multi-token call). mlx-lm's `generate_step` evaluates only the
   caches after each prefill chunk, so the last layer's writes used to pile up.
-- **`drop_misses`** (class flag, off): the drop-on-miss simulation used by
-  `scripts/sim_drop.py`. It changes nothing unless set.
+- **No drop-on-miss path.** The simulation flag `drop_misses` and
+  `scripts/sim_drop.py` were removed 2026-10-16 (user's decision); the last version is in `12e008c` (`git show 12e008c:scripts/sim_drop.py`).
 
 ## Expert pruning (`laguna_mlx/pruning.py`)
 

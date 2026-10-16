@@ -36,7 +36,7 @@ from that:
 
 ```bash
 pip install mlx==0.32.0 mlx-lm==0.31.3 numpy transformers torch pandas pytest
-python3 -m pytest -q        # 188 tests, ~25 s, tiny random-weight models only
+python3 -m pytest -q        # 183 tests, ~25 s, tiny random-weight models only
 ```
 
 `torch` is only needed by the tests (Poolside's PyTorch reference); `pandas`
@@ -172,7 +172,7 @@ All of these load real weights, so wrap each in `../.gpu/gpu-run laguna ...`.
 | `kv.json` | `python3 -m scripts.bench_kv`, then `python3 -m scripts.bench_kv --target streaming` | several hours resident (builds `refs/kv` first; the last 3 rows took 51 min); streaming 40 min (measured) |
 | `stream_profile.json` → `rows` / `resident` / `sweep_capped` | `python3 -m scripts.profile_stream`; `--resident`; `--slots 16 32 64 128` (the `ab` and `async_ab` modes were removed with their code) | ~10–15 min per mode (estimate) |
 | `kv.json` → `streaming-64slots-cap1.0gb` | `python3 -m scripts.bench_kv --target streaming --slots 64 --cache-limit-gb 1.0` | ~20 min (estimate) |
-| `drop_sim.json` | `python3 -m scripts.sim_drop` (takes no flags: even `--help` runs it) | not recorded |
+| `drop_sim.json` | `python3 -m scripts.sim_drop` at `12e008c` (script since removed) | not recorded |
 | `kv_decode_micro_fused.json` | `python3 -m scripts.micro_kv_decode` (synthetic, < 1 GB, still a GPU job) | ~10 s (measured: step 3 of the 2026-10-16 queue) |
 | `kv_qdecode_{off,on,fused}.json` | `python3 -m scripts.bench_kv --qdecode off\|on\|fused --out results/kv_qdecode_<mode>.json` | 11.5–13 min each (measured, `overnight_chain.log`) |
 | `kv_stream_{q8,q8fused,plain}.json` | `python3 -m scripts.bench_kv --target streaming --slots 64 --cache-limit-gb 1.0 --qdecode off\|fused\|plain --out results/kv_stream_<name>.json` | ~16–19 min each (measured, `sf_chain.log`) |
@@ -211,7 +211,7 @@ Details: [parity-harness.md](parity-harness.md).
 | `proxy` | `--listen`, `--upstream`, `--out` (all required) |
 | `convert` | `--hf models/Laguna-XS-2.1`, `--out models/Laguna-XS-2.1-mlx-4bit` |
 | `pack_experts` | `--model models/Laguna-XS-2.1-mlx-4bit`, `--out models/Laguna-XS-2.1-packed` |
-| `sim_drop`, `micro_kv_decode`, `lookup_acceptance` | none |
+| `micro_kv_decode`, `lookup_acceptance` | none |
 
 ## Troubleshooting
 
@@ -264,7 +264,7 @@ Details: [parity-harness.md](parity-harness.md).
 
 ## Tests
 
-`python3 -m pytest -q` runs 188 tests in about 25 s.
+`python3 -m pytest -q` runs 183 tests in about 25 s.
 
 - They use tiny random-weight Laguna configs (`tests/tiny.py`), checked against
   Poolside's PyTorch reference in `tests/reference/`.

@@ -713,7 +713,7 @@ piled up chunk after chunk.
   `test_prefill_leaves_no_pending_slot_writes`, which failed before the fix.
 - **Decode is unchanged,** since its output is always read.
 - **This repo's benchmark numbers aren't affected.** `replay.score`,
-  `bench_kv`, `profile_stream` and `sim_drop` evaluate the hidden state after
+  `bench_kv`, `profile_stream` and `sim_drop` (since removed) evaluated the hidden state after
   every chunk. The serving path (`serve_streaming`) was the exposed one.
 
 ## Open items
@@ -725,7 +725,7 @@ since this list was first written:
   tok/s (`kv.json` → `streaming-64slots-cap1.0gb`); footprint 11.26 GB in a
   later run (`sf_3.log`).
 - **The MLX pool cap is opt-in:** `load_streaming(pack_dir, slots,
-  cache_limit_gb=None)`; `serve_streaming`, `profile_stream`, `sim_drop` and
+  cache_limit_gb=None)`; `serve_streaming`, `profile_stream` and
   `bench_kv --cache-limit-gb` use 1.0. Older streaming rows stay uncapped, as
   recorded.
 - **Task 11, the mlx-lm upstream PR:** moot. Upstream mlx-lm already has

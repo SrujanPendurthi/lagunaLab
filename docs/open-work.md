@@ -8,7 +8,6 @@ peak, 6.87 tok/s, exact at 82k; [part3-answer.md](part3-answer.md)).
 
 | Question | Context | Default if nobody decides |
 |---|---|---|
-| Remove the drop-on-miss simulation code? | `StreamingSwitchGLU.drop_misses` (off) and `scripts/sim_drop.py` reproduce the failed gate (KL 0.146, top-1 0.937; `drop_sim.json`). They change nothing unless the flag is set | keep, so the result stays reproducible |
 | Turn `fused_decode` on by default anywhere? | Decided for `laptop16` (off: plain is faster and exact). `make_quantized_cache` and `DequantKVCache` keep `fused_decode=False` as their default, and moeStream's imports depend on that default (rule 7) | off |
 
 Decided:
@@ -16,6 +15,8 @@ Decided:
 - **Prompt lookup (user, 2026-10-16): keep, unused.** `generate_lookup` gives
   1.22× decode but 1.00× end to end resident (`lookup.json`); it is exact and
   tested, so keeping it costs nothing.
+- **Drop-on-miss simulation code (user, 2026-10-16): removed.** It reproduced
+  a failed gate (KL 0.146, top-1 0.937; `drop_sim.json`); removed 2026-10-16 (user's decision); the last version is in `12e008c` (`git show 12e008c:scripts/sim_drop.py`).
 
 ## Engineering, optional
 
@@ -54,8 +55,6 @@ choice as well as the smaller one. Any change must keep
 
 ### Smaller items
 
-- `sim_drop` has no argument parser, so `--help` runs it (it loads the real
-  pack). Add `argparse` with no options if it is ever touched.
 - `decode_peak_gpu_gb` in `bench_kv` covers prefill plus decode, not decode
   alone; the name overstates it.
 - `DequantKVCache.state` has no setter, so mlx-lm's prompt-cache save/load to

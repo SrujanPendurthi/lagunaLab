@@ -122,7 +122,7 @@ with one cache per layer:
 | Factory | Use |
 |---|---|
 | `model.make_cache` (default) | plain KVCache on full-attention layers, rotating window on sliding layers |
-| `lambda: laguna_mlx.cache.make_trimmable_cache(model, slack=64)` | sliding layers trimmable (speculative decoding, `sim_drop` windows) |
+| `lambda: laguna_mlx.cache.make_trimmable_cache(model, slack=64)` | sliding layers trimmable (speculative decoding) |
 | `lambda: laguna_mlx.cache.make_quantized_cache(model, bits, group_size=64, quantized_decode=False, fused_decode=False)` | 8- or 4-bit K/V on full-attention layers (rule 7); `fused_decode` (8-bit only) uses the fused decode kernel |
 
 ### `scripts/diag_actions.py`
@@ -218,7 +218,7 @@ django five**.
 
 | Comparison | Gate | Source |
 |---|---|---|
-| A change that should be lossless or near-lossless (KV quantization, streaming, drop-on-miss), against its own unmodified model | KL top-64 mean ≤ 0.02 **and** top-1 ≥ 0.98, weighted by assistant tokens over the 5 django sessions | `bench_kv`, `sim_drop` |
+| A change that should be lossless or near-lossless (KV quantization, streaming, drop-on-miss), against its own unmodified model | KL top-64 mean ≤ 0.02 **and** top-1 ≥ 0.98, weighted by assistant tokens over the 5 django sessions | `bench_kv` (drop-on-miss used `sim_drop`, removed 2026-10-16) |
 | The pruned model against the full model | no fixed gate; the operating point was chosen at KL 0.081, top-1 0.945, action match 0.3 | `results/prune_point.json` |
 | Action match | judged against the noise floor (base vs its own references: 20/20) and by same-tool rate, then a human read the mismatches | `results/action_diag.json` |
 

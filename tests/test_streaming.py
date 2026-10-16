@@ -112,47 +112,6 @@ def test_cache_limit_gb_is_opt_in(tmp_path):
         mx.set_cache_limit(before)
 
 
-def _drop_setup(tmp_path):
-    d, resident = quantized_model_dir(tmp_path)
-    out = tmp_path / "packed"
-    pack(d, out)
-    streamed, _ = load_streaming(out, slots=4)
-    l = json.loads((out / "layout.json").read_text())["layers"][0]
-    x = mx.random.normal((1, 1, TINY["hidden_size"]), key=mx.random.key(3))
-    inds, w = resident.layers[l].mlp.route(x)
-    return resident.layers[l].mlp, streamed.layers[l].mlp, x, inds, w
-
-
-def test_drop_misses_off_by_default_and_exact_when_nothing_misses(tmp_path, monkeypatch):
-    from laguna_mlx.streaming import StreamingSwitchGLU
-
-    assert StreamingSwitchGLU.drop_misses is False
-    res_block, st_block, x, inds, w = _drop_setup(tmp_path)
-    store = st_block.switch_mlp._store[0]
-    store.load(np.unique(np.array(inds)).tolist())  # everything this token needs is resident
-    monkeypatch.setattr(StreamingSwitchGLU, "drop_misses", True)
-    got = st_block.switch_mlp(x, inds)
-    np.testing.assert_allclose(np.array(got), np.array(res_block.switch_mlp(x, inds)), atol=1e-5, rtol=1e-5)
-    assert store.dropped == 0
-
-
-def test_drop_misses_zeroes_missing_experts_and_renormalizes(tmp_path, monkeypatch):
-    from laguna_mlx.streaming import StreamingSwitchGLU
-
-    res_block, st_block, x, inds, w = _drop_setup(tmp_path)
-    store = st_block.switch_mlp._store[0]
-    picked = np.array(inds)[0, 0].tolist()  # top-2 in the tiny config
-    store.load([picked[0]])  # first pick resident, second misses
-    monkeypatch.setattr(StreamingSwitchGLU, "drop_misses", True)
-    got = (st_block.switch_mlp(x, inds) * w[..., None]).sum(axis=-2)
-    present = mx.array([[[1.0, 0.0]]])
-    full = res_block.switch_mlp(x, inds)
-    want = (full * (w * present / (w * present).sum(-1, keepdims=True))[..., None]).sum(axis=-2)
-    np.testing.assert_allclose(np.array(got), np.array(want), atol=1e-5, rtol=1e-5)
-    assert store.dropped == 1 and store.decode_picks == 2
-    assert picked[1] in store.expert_slot  # the miss is still loaded for later tokens
-
-
 def test_prefill_leaves_no_pending_slot_writes(tmp_path):
     # mlx-lm's prefill evals only the caches; nothing reads the last MoE layer's output, so its
     # slot writes would stay pending and pile up across chunks (found by moeStream)

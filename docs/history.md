@@ -317,7 +317,7 @@ steps after a prefix of the longest session.
      graph constants, so every token retraces).
    - Drop-on-miss (`ffe1d74`, `0be0788`, `0505303`): design note
      [gpu-side-routing.md](gpu-side-routing.md), stage 1 simulated with
-     `python3 -m scripts.sim_drop` → `drop_sim.json`: KL 0.146, top-1 0.937,
+     `python3 -m scripts.sim_drop` (removed 2026-10-16) → `drop_sim.json`: KL 0.146, top-1 0.937,
      14% of picks dropped. Fails the gate.
    - An exact fix needs GPU-readable expert pages: a C++ MLX extension. Not
      pursued, by the user's choice (2026-10-15).

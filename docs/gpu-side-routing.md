@@ -199,7 +199,7 @@ memory: 128 slots is 68.9 ms against 72.2 at 64.
 
 ## Stage 1 result (2026-10-15): fails the gate
 
-Source: `results/drop_sim.json` (`scripts/sim_drop.py`). Setup:
+Source: `results/drop_sim.json` (`scripts/sim_drop.py`, removed 2026-10-16 (user's decision); the last version is in `12e008c` (`git show 12e008c:scripts/sim_drop.py`)). Setup:
 
 - pruned-50 pack, 64 slots, 1 GB pool cap;
 - the 5 django sessions, each processed exactly up to 32k tokens;
@@ -236,6 +236,5 @@ by 4 points.
   - a drop variant that keeps the top-1 pick exact: sync only when the top-1
     expert misses. That needs its sync per layer, so it saves nothing unless
     the check moves on device. Not pursued;
-  - **removing the simulation code** (`StreamingSwitchGLU.drop_misses`, off,
-    and `scripts/sim_drop.py`). It's kept for now so this result can be
-    reproduced.
+  - **removing the simulation code** (`StreamingSwitchGLU.drop_misses` and
+    `scripts/sim_drop.py`): done, removed 2026-10-16 (user's decision); the last version is in `12e008c` (`git show 12e008c:scripts/sim_drop.py`).

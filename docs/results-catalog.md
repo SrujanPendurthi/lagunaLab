@@ -33,7 +33,7 @@ changed it.
 | `action_diag.json` | `diag_actions --pruned models/Laguna-XS-2.1-pruned-50` | `17d8c84` | 20 actions: base vs own refs, pruned vs base | noise floor 20/20; pruned 6/20 exact, 18/20 same tool |
 | `kv.json` | `bench_kv`; `bench_kv --target streaming [--slots 64 --cache-limit-gb 1.0]` | `d60dd8e` / `5798f52` | per-session replay rows and per-setting summaries at full length | `laptop16`: 10.16 GB, 6.87 tok/s, exact |
 | `stream_profile.json` | `profile_stream` (various flags) | `e0c5deb` / `b35250e` | S5: step breakdowns (`rows`, `resident`, `ab`, `sweep_capped`, `async_ab`) | pool cap halves the 32k step; sync floor 22 ms |
-| `drop_sim.json` | `sim_drop` | `0505303` | drop-on-miss quality per session | KL 0.146, top-1 0.937: fails |
+| `drop_sim.json` | `sim_drop` (script removed 2026-10-16; last in `12e008c`) | `0505303` | drop-on-miss quality per session | KL 0.146, top-1 0.937: fails |
 | `kv_decode_micro.json` | `micro_kv_decode` (before the fused kernel) | `fa828e5` | one layer's decode attention, synthetic, 3 contexts | dequantize + SDPA 12.98 ms vs plain 7.19 at 82k |
 | `kv_decode_micro_fused.json` | `micro_kv_decode` | `2128b04` | same, plus the fused kernel | fused 12.24 ms at 82k, in isolation |
 | `kv_qdecode_off.json`, `_on.json`, `_fused.json` | `bench_kv --qdecode off/on/fused --out …` | `2128b04` | resident 8-bit decode A/B, 82k, 64 steps, decode tokens | 4.49 / 6.64 / 7.59 tok/s, identical tokens |

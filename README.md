@@ -102,10 +102,9 @@ streaming loader, the KV caches, and the replay harness for its parity eval.
 | DFlash speculative decoding | 0.36×–0.86× of greedy, resident | `dflash.json` |
 | Prompt-lookup speculative decoding | 1.22× decode, 1.00× end to end, resident (8k prefixes); kept in the code, unused (user, 2026-10-16) | `lookup.json` |
 
-**Drop-on-miss simulation, reproduce:** `python3 -m scripts.sim_drop`. It
-uses `StreamingSwitchGLU.drop_misses`, a class flag that is off by default
-and changes nothing unless set. Whether to remove the code is the user's
-call; it stays for reproducibility. Design and verdict:
+**Drop-on-miss simulation:** the code (`scripts/sim_drop.py` and the
+`StreamingSwitchGLU.drop_misses` flag) was removed 2026-10-16 (user's decision); the last version is in `12e008c` (`git show 12e008c:scripts/sim_drop.py`). The result stays in
+`results/drop_sim.json`. Design and verdict:
 [docs/gpu-side-routing.md](docs/gpu-side-routing.md).
 
 Every no-go with its numbers: [docs/no-gos.md](docs/no-gos.md).
@@ -126,8 +125,8 @@ Full list, with what is unmeasured and the code's known limits:
   (128 slots), streaming is still 22 ms per step slower than resident at 32k
   (68.9 against 46.8 ms; `stream_profile.json`). That's the cost of 39
   host round-trips per token.
-- **User decision pending:** remove the drop-on-miss simulation code.
-  (Prompt lookup: kept, unused, by the user's decision on 2026-10-16.)
+- **User decisions made (2026-10-16):** prompt lookup kept, unused; the
+  drop-on-miss simulation code removed.
 - **Not yet measured:**
   - a real 16 GB Mac;
   - 32 slots with the cap at 82k;
@@ -161,7 +160,7 @@ sessions), `refs/` (cached reference logprobs), `data/` (SWE-bench Lite).
 # dependencies (pinned versions used here; do not upgrade mlx / mlx-lm)
 pip install mlx==0.32.0 mlx-lm==0.31.3 numpy transformers torch pandas pytest
 
-# tests: 188 tests on tiny random-weight models, ~25 s, no weights or GPU budget needed
+# tests: 183 tests on tiny random-weight models, ~25 s, no weights or GPU budget needed
 python3 -m pytest -q
 ```
 

@@ -56,7 +56,7 @@ described in [parity-harness.md](parity-harness.md).
 
 - Anything not in the tables above: script internals and CLIs other than
   `diag_actions`, private helpers (except `_greedy_actions`, `_DropKeepalive`
-  and `_setup`), `bench_*`, `profile_stream`, `sim_drop`, `micro_kv_decode`,
+  and `_setup`), `bench_*`, `profile_stream`, `micro_kv_decode`,
   `laguna_mlx/q8_attn.py` (internal to `DequantKVCache`), `pruning.py`,
   `hooks.py`, tests and docs.
 - New files in `results/` and new reference directories. Don't overwrite or
