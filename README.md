@@ -8,32 +8,127 @@ Everything was built and measured on a 24 GB M4 MacBook Air (MLX 0.32.0,
 mlx-lm 0.31.3, Python 3.13). Every number in these docs comes from a file in
 [`results/`](results/); the source file is named next to each number.
 
-## Where it ended up
+## Summary
 
-| Configuration | Disk | Peak GPU memory | Decode | Quality vs. its reference |
-|---|---|---|---|---|
-| Full 4-bit model, resident | 18.4 GB | 18.9 GB | 34.2 tok/s | reference |
-| Pruned 50% of experts (REAP), resident | 9.8 GB | 10.1 GB | 38.7 tok/s | top-1 0.945, KL 0.081 vs. full model |
-| Pruned, SSD-streamed (32 expert slots/layer) | 9.8 GB | 3.97 GB | 12.8 tok/s | identical to pruned resident |
-| Pruned, streamed, **82,671-token session** | 9.8 GB | **8.04 GB** | 4.7 tok/s | identical (top-1 1.0, KL 0) |
-| Pruned, streamed, 64 slots, 1 GB MLX pool cap, **82,671-token session** | 9.8 GB | **10.16 GB** | **6.9 tok/s** | identical (top-1 1.0, KL 0) |
+- **What:** an MLX port of Laguna XS 2.1, SSD expert streaming, expert pruning
+  (REAP), KV-cache compression, and a teacher-forced replay harness. The
+  harness scores any change against the unmodified model on 11 captured
+  `pool` agent sessions (42,771–82,671 tokens each).
+- **Goal (Parts 1–3):**
+  - Part 1: port the model and set a baseline.
+  - Part 2: prune experts.
+  - Part 3: run the longest captured session on a **16 GB Mac**, assumed to
+    give a 12 GB peak budget.
+- **The answer:** the pruned model, SSD-streamed, 64 expert slots per layer,
+  MLX buffer pool capped at 1 GB, plain KV cache. On the 82,671-token session
+  it peaks at **10.16 GB**, decodes at **6.87 tok/s** (93% of resident), and
+  its output is identical to the resident pruned model. One command:
+  `python3 -m scripts.serve_streaming --preset laptop16`.
 
-Sources: `results/prune_point.json` (short prompts), `results/kv.json` (82k session).
+## Results, Parts 1–3
 
-The two 32-slot streaming rows were measured before the MLX buffer-pool cap. With `load_streaming(..., cache_limit_gb=1.0)`, the 32k-context streaming
-decode step halved (169.9 to 84.7 ms; `results/stream_profile.json`, S5 in
-[docs/results.md](docs/results.md)). The memory and quality numbers stand.
+| Configuration | Peak GB | Decode tok/s | Quality vs. its reference | 12 GB budget | Source |
+|---|---|---|---|---|---|
+| **Short prompts** | | | | | |
+| Full 4-bit model, resident (Part 1 baseline) | 18.9 | 34.2 | reference | — | `prune_point.json` |
+| Pruned 50% (REAP), resident (Part 2) | 10.1 | 38.7 | top-1 0.945, KL 0.081 vs. full | — | `prune_point.json` |
+| Pruned, streamed, 32 slots, uncapped pool | 3.97 | 12.8 | identical to pruned resident | — | `prune_point.json` |
+| **82,671-token session (Part 3), pruned model** | | | | | |
+| Resident, plain KV | 14.60 | 7.42 | reference | fail | `kv.json` |
+| Resident, 8-bit KV | 13.16 | 4.10 | top-1 0.9963, KL 0.0020 | fail | `kv.json` |
+| Resident, 4-bit KV | 12.29 | 4.99 | top-1 0.9944, KL 0.0038 | fail (+0.29 GB) | `kv.json` |
+| Streamed, 32 slots, uncapped pool (superseded) | 8.04 | 4.69 | top-1 1.0, KL 0 | pass | `kv.json` |
+| **Streamed, 64 slots, 1 GB pool cap (`laptop16`)** | **10.16** | **6.87** | **top-1 1.0, KL 0** | **pass** | `kv.json` |
 
-**The 16 GB answer:** the pruned model, streamed from SSD with 64 expert slots
-per layer and MLX's buffer pool capped at 1 GB. It runs the longest captured
-agent session (82,671 tokens) at 10.16 GB peak, under the 12 GB budget assumed
-for a 16 GB Mac. It decodes at 6.9 tok/s, 93% of the resident pruned model, and
-its output is identical. KV quantization works for quality (4-bit: top-1 0.994,
-KL 0.004), but the resident pruned model still peaks at 12.29 GB, just over
-budget. Details and open questions: [docs/part3-answer.md](docs/part3-answer.md).
+- **KV gate:** KL top-64 mean ≤ 0.02 and top-1 ≥ 0.98 against the pruned model
+  with a plain cache, over the 5 held-out django sessions. Both KV widths pass
+  on quality. Resident fails on memory: peak minus KV is 11.2–11.4 GB.
+- **Quantized KV is slower:** it decodes slower at 82k because it
+  re-dequantizes each layer every token, ~58 ms per token
+  (`kv_decode_micro.json`).
+- **Pruned-model actions:** greedy action match is 6/20 exact and 18/20 same
+  tool, against a noise floor of 20/20 (`action_diag.json`).
+- **Parity:** against llama.cpp, the one valid row scored top-1 0.969
+  (`parity.json`). Tiny-model tests against Poolside's PyTorch reference
+  carry the rest.
+- Speeds are comparable only within one results file. Full findings:
+  [docs/results.md](docs/results.md). Recommendation and what is unmeasured:
+  [docs/part3-answer.md](docs/part3-answer.md).
 
-See [docs/results.md](docs/results.md) for the full findings, including the
-negative ones (DFlash and prompt-lookup speculative decoding).
+## Run the 16 GB configuration
+
+```bash
+python3 -m scripts.serve_streaming --preset laptop16 --port 8081
+```
+
+That is an OpenAI-compatible server on mlx-lm's.
+
+- **The preset:** it resolves to the `models/Laguna-XS-2.1-pruned-50-packed`
+  pack, 64 slots, `cache_limit_gb=1.0` and the plain KV cache, and prints them
+  at start.
+- **Server flags it adds:** `--max-tokens 4096` (pool aborts on a truncated
+  reply), `--prompt-cache-size 6` and `--prompt-cache-bytes 4294967296`.
+  Flags you pass explicitly win.
+- **Wired limit:** the server never raises it.
+- **Unmeasured:** serving end to end on an actual 16 GB Mac, including the
+  prompt cache's memory, has not been measured. See part3-answer.md.
+
+From Python:
+
+```python
+from laguna_mlx.streaming import load_streaming
+model, tok = load_streaming("models/Laguna-XS-2.1-pruned-50-packed", slots=64, cache_limit_gb=1.0)
+```
+
+## Reuse by moeStream
+
+The sibling `moeStream` project imports this repo read-only: the model, the
+streaming loader, the KV caches, and the replay harness for its parity eval.
+
+- How to reuse the harness, references, models and gates:
+  [docs/parity-harness.md](docs/parity-harness.md).
+- The stable interfaces are listed in `../.gpu/RULES.md`. Changes to them
+  are additive only.
+
+## Ruled out (measured)
+
+| Idea | Result | Source |
+|---|---|---|
+| `mx.async_eval` dispatch per streamed layer | about 1.5× slower (64 slots: 46.8 to 77.4 ms per step at 256 context, 68.7 to 104.6 at 32k), same tokens | `stream_profile.json` → `async_ab` |
+| Batched expert-slot writes | slower than per-expert writes | `stream_profile.json` → `ab` |
+| `mx.compile` for the decode step | ruled out off-GPU: KV cache offsets retrace every token | results.md, "The sync floor" |
+| Drop-on-miss (skip non-resident experts, sync once per token) | fails the gate at 64 slots: KL 0.146, top-1 0.937, 14% of picks dropped | `drop_sim.json` |
+| DFlash speculative decoding | 0.36×–0.86× of greedy, resident | `dflash.json` |
+| Prompt-lookup speculative decoding | 1.22× decode, 1.00× end to end, resident (8k prefixes); no keep/drop decision | `lookup.json` |
+
+**Drop-on-miss simulation, reproduce:** `python3 -m scripts.sim_drop`. It
+uses `StreamingSwitchGLU.drop_misses`, a class flag that is off by default
+and changes nothing unless set. Whether to remove the code is the user's
+call; it stays for reproducibility. Design and verdict:
+[docs/gpu-side-routing.md](docs/gpu-side-routing.md).
+
+## Open, optional work
+
+- **Fused 8-bit KV decode kernel** (`mx.fast.metal_kernel`). The dequantize
+  costs ~58 ms per token at 82k.
+  - `make_quantized_cache(..., quantized_decode=True)`, off by default, uses
+    mlx-lm's quantized attention instead. It saves only ~9 ms per token in a
+    single-layer test.
+  - It needs a GPU A/B before use; the coordinator decides after moeStream's
+    KV profile lands.
+  - Plain KV is the recommendation when ~1.6 GB more fits.
+- **An exact fix for the streaming sync floor.** With every expert resident
+  (128 slots), streaming is still 22 ms per step slower than resident at 32k
+  (68.9 against 46.8 ms; `stream_profile.json`). That's the cost of 39
+  host round-trips per token. Removing it exactly needs GPU-side page
+  access that pinned MLX doesn't expose from Python.
+- **Not yet measured:**
+  - a real 16 GB Mac;
+  - process footprint at 82k with 64 slots;
+  - 32 slots with the cap at 82k;
+  - a `serve_streaming` end-to-end session;
+  - single-run speed variance;
+  - a 100-action match sample.
 
 ## What's in here
 
@@ -76,12 +171,7 @@ prompt = tok.apply_chat_template([{"role": "user", "content": "Reverse a linked 
 print(generate(model, tok, prompt=prompt, max_tokens=200))
 ```
 
-Low-memory streaming version of the same model:
-
-```python
-from laguna_mlx.streaming import load_streaming
-model, tok = load_streaming("models/Laguna-XS-2.1-pruned-50-packed", slots=32)
-```
+Low-memory streaming version: see "Run the 16 GB configuration" above.
 
 ## Documentation
 
@@ -89,7 +179,7 @@ model, tok = load_streaming("models/Laguna-XS-2.1-pruned-50-packed", slots=32)
   caches and the replay metric work, and why they are built that way.
 - [docs/results.md](docs/results.md): all findings for Parts 1–3, with sources.
 - [docs/part3-answer.md](docs/part3-answer.md): the 16 GB recommendation and what is unmeasured.
-- [docs/gpu-side-routing.md](docs/gpu-side-routing.md): design note for removing the per-layer sync (proposal).
+- [docs/gpu-side-routing.md](docs/gpu-side-routing.md): design note for removing the per-layer sync; stage 1 (drop-on-miss) failed the quality gate.
 - [docs/parity-harness.md](docs/parity-harness.md): how another repo can reuse the replay harness, references and gates read-only.
 - [docs/runbook.md](docs/runbook.md): reproducing everything, machine-safety rules,
   and known gotchas.
