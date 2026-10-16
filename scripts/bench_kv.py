@@ -3,6 +3,7 @@
 python3 -m scripts.bench_kv                    # resident: plain, 8-bit, 4-bit on 5 django sessions
 python3 -m scripts.bench_kv --target streaming # step 0 only: plain cache, longest session
 python3 -m scripts.bench_kv --target streaming --slots 64 --cache-limit-gb 1.0   # own rows
+python3 -m scripts.bench_kv --qdecode off|on   # 8-bit decode A/B on the longest session (results/kv_qdecode.json)
 Resumable: finished rows in results/kv.json are skipped.
 """
 import argparse
@@ -24,6 +25,7 @@ PACK = "models/Laguna-XS-2.1-pruned-50-packed"
 HELDOUT = sorted(glob.glob("traces/django__*.jsonl"))
 REFS = Path("refs/kv")
 OUT = Path("results/kv.json")
+QD_OUT = Path("results/kv_qdecode.json")
 CAP = 131072  # above the longest captured session (82,671 tokens); build_ref's default would truncate
 BUDGET_GB = 12.0  # 75% of 16 GB: stand-in for a 16 GB Mac's recommended working set
 MIN_TOP1, MAX_KL = 0.98, 0.02
@@ -59,12 +61,14 @@ def decode_at_ctx(model, ids, make_cache, n=64, chunk=2048):
     kv = sum(c.nbytes for c, lt in zip(cache, model.args.layer_types) if lt == "full_attention")
     tok = mx.argmax(model.lm_head(h[:, -1]), axis=-1)
     mx.eval(tok)
+    toks = []
     t0 = time.perf_counter()
     for _ in range(n):
         tok = mx.argmax(model.lm_head(model.model(tok[None], cache=cache)[:, -1]), axis=-1)
         mx.eval(tok)
+        toks.append(tok.item())
     return {"kv_gb": kv / 1e9, "decode_tok_s": n / (time.perf_counter() - t0),
-            "decode_peak_gpu_gb": mx.get_peak_memory() / 1e9}
+            "decode_peak_gpu_gb": mx.get_peak_memory() / 1e9, "decode_tokens": toks}
 
 
 def summarize(res):
@@ -103,14 +107,37 @@ def sweep(model, target, settings, refs, out=OUT, decode_n=64):
                     row.update(decode_at_ctx(model, np.load(r)["ids"], mk, n=decode_n))
                 res["rows"][key] = row
                 res["summary"] = summarize(res)
-                tmp = out.with_suffix(".tmp")
-                tmp.write_text(json.dumps(res, indent=1))
-                tmp.replace(out)  # atomic: an interrupt never leaves a half-written file
+                _save(res, out)
                 print(key, {k: round(v, 4) if isinstance(v, float) else v for k, v in row.items()}, flush=True)
             # checked on finished rows too, so a resume can't skip past a recorded blow-up
             peak = max(row["peak_mem_gb"], row.get("decode_peak_gpu_gb", 0))
             if peak > PEAK_ABORT_GB:
                 raise SystemExit(f"{key}: peak {peak:.2f} GB > {PEAK_ABORT_GB} GB; stopping before longer sessions")
+    return res
+
+
+def _save(res, out):
+    tmp = out.with_suffix(".tmp")
+    tmp.write_text(json.dumps(res, indent=1))
+    tmp.replace(out)  # atomic: an interrupt never leaves a half-written file
+
+
+def qdecode_ab(model, ref, quantized_decode, out=QD_OUT, decode_n=64):
+    """8-bit KV decode on one session with `DequantKVCache(quantized_decode=...)` off ("8") or
+    on ("8q"). Prefill is identical either way (only L==1 steps change), so no replay score."""
+    out = Path(out)
+    res = json.loads(out.read_text()) if out.exists() else {"rows": {}}
+    key = f"resident/8{'q' if quantized_decode else ''}/{ref.stem}"
+    if key not in res["rows"]:
+        mk = lambda: make_quantized_cache(model, 8, quantized_decode=quantized_decode)  # noqa: E731
+        res["rows"][key] = {"tokens": int(len(np.load(ref)["ids"])),
+                            **decode_at_ctx(model, np.load(ref)["ids"], mk, n=decode_n)}
+        a, b = (res["rows"].get(f"resident/{k}/{ref.stem}") for k in ("8", "8q"))
+        if a and b:
+            res["tokens_identical"] = a["decode_tokens"] == b["decode_tokens"]
+            res["speedup"] = b["decode_tok_s"] / a["decode_tok_s"]
+        _save(res, out)
+        print(key, {k: v for k, v in res["rows"][key].items() if k != "decode_tokens"}, flush=True)
     return res
 
 
@@ -130,8 +157,15 @@ def main():
     p.add_argument("--target", choices=["resident", "streaming"], default="resident")
     p.add_argument("--slots", type=int, default=32)
     p.add_argument("--cache-limit-gb", type=float)
+    p.add_argument("--qdecode", choices=["off", "on"], help="resident 8-bit decode A/B, longest session only")
     a = p.parse_args()
     wire_resident(a.target == "resident")
+    if a.qdecode:
+        refs = sorted(REFS.glob("*.npz"), key=lambda r: len(np.load(r)["ids"]))
+        model, _ = load(MODEL)
+        res = qdecode_ab(model, refs[-1], a.qdecode == "on")
+        print({k: v for k, v in res.items() if k != "rows"})
+        return
     if a.target == "resident":
         model, tok = load(MODEL)
         refs = build_refs(model, tok, HELDOUT, REFS)

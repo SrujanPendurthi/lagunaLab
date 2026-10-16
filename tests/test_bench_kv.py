@@ -82,3 +82,14 @@ def test_streaming_label_keeps_old_rows_and_separates_new_configs():
     assert bench_kv.streaming_label(32, None) == "streaming"
     assert bench_kv.streaming_label(64, 1.0) == "streaming-64slots-cap1.0gb"
     assert bench_kv.streaming_label(32, 1.0) == "streaming-32slots-cap1.0gb"
+
+
+def test_qdecode_ab_rows_and_comparison(tok, traces, tmp_path):
+    m = mlx_only_model(head_dim=64)
+    refs = bench_kv.build_refs(m, tok, traces, tmp_path / "refs", cap=4096)
+    out = tmp_path / "qd.json"
+    bench_kv.qdecode_ab(m, refs[-1], False, out, decode_n=4)
+    res = bench_kv.qdecode_ab(m, refs[-1], True, out, decode_n=4)
+    assert set(res["rows"]) == {"resident/8/long", "resident/8q/long"}
+    assert len(res["rows"]["resident/8q/long"]["decode_tokens"]) == 4
+    assert isinstance(res["tokens_identical"], bool) and res["speedup"] > 0
