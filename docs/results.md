@@ -153,7 +153,10 @@ On the 10 short prompts, every setting is between 1.01× and 1.06×.
 The decode-only speedup clears the plan's 1.1× keep threshold, but end-to-end
 time is unchanged, presumably because the 8k-token prefill dominates a
 256-token generation. The real-machine gain is well below S2's prediction. The
-repo records the numbers but no keep/drop decision.
+repo records the numbers.
+
+**Decision (user, 2026-10-16): keep it, unused.** `generate_lookup` stays in
+`laguna_mlx/dflash.py` and isn't called by the server or any preset. It works and its output is exact; it just doesn't pay off end to end for this workload, where prefill dominates. Keeping it costs nothing.
 
 ---
 

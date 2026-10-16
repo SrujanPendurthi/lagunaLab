@@ -100,7 +100,7 @@ streaming loader, the KV caches, and the replay harness for its parity eval.
 | `mx.compile` for the decode step | ruled out off-GPU: KV cache offsets retrace every token | results.md, "The sync floor" |
 | Drop-on-miss (skip non-resident experts, sync once per token) | fails the gate at 64 slots: KL 0.146, top-1 0.937, 14% of picks dropped | `drop_sim.json` |
 | DFlash speculative decoding | 0.36×–0.86× of greedy, resident | `dflash.json` |
-| Prompt-lookup speculative decoding | 1.22× decode, 1.00× end to end, resident (8k prefixes); no keep/drop decision | `lookup.json` |
+| Prompt-lookup speculative decoding | 1.22× decode, 1.00× end to end, resident (8k prefixes); kept in the code, unused (user, 2026-10-16) | `lookup.json` |
 
 **Drop-on-miss simulation, reproduce:** `python3 -m scripts.sim_drop`. It
 uses `StreamingSwitchGLU.drop_misses`, a class flag that is off by default
@@ -126,8 +126,8 @@ Full list, with what is unmeasured and the code's known limits:
   (128 slots), streaming is still 22 ms per step slower than resident at 32k
   (68.9 against 46.8 ms; `stream_profile.json`). That's the cost of 39
   host round-trips per token.
-- **User decisions pending:** remove the drop-on-miss simulation code; keep or
-  drop prompt lookup.
+- **User decision pending:** remove the drop-on-miss simulation code.
+  (Prompt lookup: kept, unused, by the user's decision on 2026-10-16.)
 - **Not yet measured:**
   - a real 16 GB Mac;
   - 32 slots with the cap at 82k;

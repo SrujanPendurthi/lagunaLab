@@ -146,7 +146,8 @@ that self-check row.
 - **S4** (`ffb1ae4` … `5659be6`): `python3 -m scripts.bench_lookup` overnight →
   `lookup.json`. Resident g = 4, n = 3: 1.22× decode, 1.00× end to end, after
   8k-token real session prefixes. The script's own `summary.keep` is true (its
-  decode-only 1.1× rule), but no human keep/drop decision was recorded.
+  decode-only 1.1× rule). Decision (user, 2026-10-16): keep the code,
+  unused; it is exact but doesn't pay off end to end here.
 - **Task 15** (decode pipelining, `mx.compile`, prefill tuning) was not run as
   planned; the S1–S5 addendum replaced it, and `mx.compile` was assessed later
   under S5.

@@ -9,8 +9,13 @@ peak, 6.87 tok/s, exact at 82k; [part3-answer.md](part3-answer.md)).
 | Question | Context | Default if nobody decides |
 |---|---|---|
 | Remove the drop-on-miss simulation code? | `StreamingSwitchGLU.drop_misses` (off) and `scripts/sim_drop.py` reproduce the failed gate (KL 0.146, top-1 0.937; `drop_sim.json`). They change nothing unless the flag is set | keep, so the result stays reproducible |
-| Keep or drop prompt lookup? | `generate_lookup` gives 1.22× decode but 1.00× end to end resident (`lookup.json`); the script's automatic `keep` flag is true; no human decision recorded | keep the code, use it nowhere |
 | Turn `fused_decode` on by default anywhere? | Decided for `laptop16` (off: plain is faster and exact). `make_quantized_cache` and `DequantKVCache` keep `fused_decode=False` as their default, and moeStream's imports depend on that default (rule 7) | off |
+
+Decided:
+
+- **Prompt lookup (user, 2026-10-16): keep, unused.** `generate_lookup` gives
+  1.22× decode but 1.00× end to end resident (`lookup.json`); it is exact and
+  tested, so keeping it costs nothing.
 
 ## Engineering, optional
 
