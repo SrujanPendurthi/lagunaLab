@@ -100,3 +100,12 @@ def test_qdecode_ab_fused_row(tok, traces, tmp_path):
     refs = bench_kv.build_refs(m, tok, traces, tmp_path / "refs", cap=4096)
     res = bench_kv.qdecode_ab(m, refs[-1], False, tmp_path / "f.json", decode_n=4, fused=True)
     assert list(res["rows"]) == ["resident/8f/long"]
+
+
+def test_qdecode_ab_label_and_plain_row(tok, traces, tmp_path):
+    m = mlx_only_model(head_dim=128)
+    refs = bench_kv.build_refs(m, tok, traces, tmp_path / "refs", cap=4096)
+    out = tmp_path / "s.json"
+    bench_kv.qdecode_ab(m, refs[-1], False, out, decode_n=4, label="streaming-64slots-cap1.0gb", plain=True)
+    res = bench_kv.qdecode_ab(m, refs[-1], False, out, decode_n=4, label="streaming-64slots-cap1.0gb", fused=True)
+    assert set(res["rows"]) == {"streaming-64slots-cap1.0gb/plain/long", "streaming-64slots-cap1.0gb/8f/long"}
