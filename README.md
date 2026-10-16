@@ -108,7 +108,12 @@ and changes nothing unless set. Whether to remove the code is the user's
 call; it stays for reproducibility. Design and verdict:
 [docs/gpu-side-routing.md](docs/gpu-side-routing.md).
 
+Every no-go with its numbers: [docs/no-gos.md](docs/no-gos.md).
+
 ## Open, optional work
+
+Full list, with what is unmeasured and the code's known limits:
+[docs/open-work.md](docs/open-work.md).
 
 - **Fused 8-bit KV decode kernel: built and measured** (`laguna_mlx/q8_attn.py`).
   1.69× faster decode than dequantize at 82k, identical tokens. Open:
@@ -120,11 +125,11 @@ call; it stays for reproducibility. Design and verdict:
   it needs a C++ MLX extension). With every expert resident
   (128 slots), streaming is still 22 ms per step slower than resident at 32k
   (68.9 against 46.8 ms; `stream_profile.json`). That's the cost of 39
-  host round-trips per token. Removing it exactly needs GPU-side page
-  access that pinned MLX doesn't expose from Python.
+  host round-trips per token.
+- **User decisions pending:** remove the drop-on-miss simulation code; keep or
+  drop prompt lookup.
 - **Not yet measured:**
   - a real 16 GB Mac;
-  - process footprint at 82k with 64 slots;
   - 32 slots with the cap at 82k;
   - a `serve_streaming` end-to-end session;
   - single-run speed variance;
@@ -137,7 +142,8 @@ call; it stays for reproducibility. Design and verdict:
 | `laguna_mlx/laguna.py` | MLX port of Laguna, written as an mlx-lm model file (`import laguna_mlx` registers `model_type: laguna`) |
 | `laguna_mlx/streaming.py` | SSD expert streaming: resident common weights, per-layer expert files, LFU slot cache |
 | `laguna_mlx/pruning.py` | Expert saliency (REAP, frequency, gate mass), keep-sets, router masking, checkpoint slicing |
-| `laguna_mlx/cache.py` | Trimmable sliding-window cache (speculative decoding); quantized KV cache (`DequantKVCache`) |
+| `laguna_mlx/cache.py` | Trimmable sliding-window cache (speculative decoding); quantized KV cache (`DequantKVCache`, with `quantized_decode` and `fused_decode`) |
+| `laguna_mlx/q8_attn.py` | Fused 8-bit KV single-token attention kernel (`mx.fast.metal_kernel`) |
 | `laguna_mlx/dflash.py` | Greedy decoding, DFlash and prompt-lookup speculative decoding (lossless) |
 | `laguna_mlx/hooks.py` | Opt-in routing recorder |
 | `replay/` | Captured-session loading and the teacher-forced replay metric (KL, top-1, action match) |
@@ -155,7 +161,7 @@ sessions), `refs/` (cached reference logprobs), `data/` (SWE-bench Lite).
 # dependencies (pinned versions used here; do not upgrade mlx / mlx-lm)
 pip install mlx==0.32.0 mlx-lm==0.31.3 numpy transformers torch pandas pytest
 
-# tests: tiny random-weight models, ~30 s, no weights or GPU budget needed
+# tests: 188 tests on tiny random-weight models, ~25 s, no weights or GPU budget needed
 python3 -m pytest -q
 ```
 
@@ -175,8 +181,21 @@ Low-memory streaming version: see "Run the 16 GB configuration" above.
 
 ## Documentation
 
-- [docs/architecture.md](docs/architecture.md): how the port, streaming, pruning,
-  caches and the replay metric work, and why they are built that way.
+Index with reading order: [docs/README.md](docs/README.md).
+
+- [docs/architecture.md](docs/architecture.md): repo map (every module,
+  script and test), data flows, and how the port, streaming, pruning, caches,
+  the fused kernel and the replay metric work, and why.
+- [docs/history.md](docs/history.md): chronological record of Parts 1–3:
+  goals, methods, commands, results, decisions and commits.
+- [docs/results-catalog.md](docs/results-catalog.md): every results file with
+  its command and commit, and every run's numbers.
+- [docs/no-gos.md](docs/no-gos.md): everything tried or assessed and dropped,
+  with numbers.
+- [docs/interfaces.md](docs/interfaces.md): what moeStream relies on, and what
+  is safe to change.
+- [docs/open-work.md](docs/open-work.md): open decisions, optional
+  engineering, unmeasured items, known limitations.
 - [docs/results.md](docs/results.md): all findings for Parts 1–3, with sources.
 - [docs/part3-answer.md](docs/part3-answer.md): the 16 GB recommendation and what is unmeasured.
 - [docs/gpu-side-routing.md](docs/gpu-side-routing.md): design note for removing the per-layer sync; stage 1 (drop-on-miss) failed the quality gate.

@@ -112,10 +112,11 @@ recommendation; this is for a machine where 1.45 GB matters more.
     per step at 64 slots (32k) would come from the SSD instead of memory.
   - Rough worst case: 21.6 × 1.77 MB ≈ 38 MB of reads per token. That's an
     estimate; its cost wasn't measured.
-- **Process footprint at 82k with 64 slots.** `mx.get_peak_memory` (10.16 GB)
-  doesn't count the free-buffer pool, which is capped at 1 GB. So top's
-  footprint should stay at or below about 11.2 GB, but that wasn't recorded.
-  The run never tripped the 14 GB watchdog.
+- **Process footprint at 82k with 64 slots: measured later.** In the
+  2026-10-16 streaming A/B the watchdog recorded a peak footprint of 11.26 GB
+  for the plain `laptop16` run (peak 10.17 GB) and 9.54 GB with
+  `--fused-decode` (`results/sf_3.log`, `sf_2.log`). That is about 0.1 GB above
+  the ~11.2 GB estimated from a 10.16 GB peak plus the 1 GB pool cap.
 - **32 slots with the cap, at 82k.** It would trade speed for about 2 GB more
   headroom. The capped 32k profile suggests about 12 tok/s against 13.9 at
   64 slots.

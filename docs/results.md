@@ -715,22 +715,17 @@ piled up chunk after chunk.
 
 ## Open items
 
-- **16 GB answer at 64 slots (capped):** measure `bench_kv --target streaming
-  --slots 64` with the pool cap, which needs `cache_limit_gb` passed in
-  bench_kv. That checks the ~10 GB peak estimate at 82k.
-- **S5 follow-up: the MLX pool cap is opt-in.**
-  - `load_streaming(pack_dir, slots, cache_limit_gb=None)`. The default leaves
-    MLX's limit alone, so moeStream's imports and past numbers are unchanged.
-  - `serve_streaming` and `profile_stream` pass 1.0.
-  - The other benchmarks still run uncapped, matching their recorded results.
-    Rerunning `bench_kv --target streaming` with the cap would update the
-    16 GB answer's decode number.
-- **Task 11: mlx-lm upstream PR** adding Laguna. Not filed; it is
-  outward-facing, so it needs a human go-ahead.
-- **Prompt lookup:** keep/drop decision not recorded (see above).
-- **Action match** on a larger sample (100 actions).
-- **Deferred minors** from the Part 3 review:
-  - `refs/kv` references aren't tied to a model path;
-  - `decode_peak_gpu_gb` actually covers prefill plus decode;
-  - `DequantKVCache.state` has no setter, so prompt-cache save/load would fail
-    (unused today).
+Moved to [open-work.md](open-work.md), which tracks what is still open. Closed
+since this list was first written:
+
+- **64 slots at 82k with the pool cap:** measured, 10.16 GB peak and 6.87
+  tok/s (`kv.json` → `streaming-64slots-cap1.0gb`); footprint 11.26 GB in a
+  later run (`sf_3.log`).
+- **The MLX pool cap is opt-in:** `load_streaming(pack_dir, slots,
+  cache_limit_gb=None)`; `serve_streaming`, `profile_stream`, `sim_drop` and
+  `bench_kv --cache-limit-gb` use 1.0. Older streaming rows stay uncapped, as
+  recorded.
+- **Task 11, the mlx-lm upstream PR:** moot. Upstream mlx-lm already has
+  Laguna (#1334, #1704).
+- **`refs/kv` not tied to a model path:** new references record `model`
+  (`2fb0bcc`); existing sets are documented in parity-harness.md.
