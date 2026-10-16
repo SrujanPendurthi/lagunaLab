@@ -43,9 +43,10 @@ mlx-lm 0.31.3, Python 3.13). Every number in these docs comes from a file in
 - **KV gate:** KL top-64 mean ≤ 0.02 and top-1 ≥ 0.98 against the pruned model
   with a plain cache, over the 5 held-out django sessions. Both KV widths pass
   on quality. Resident fails on memory: peak minus KV is 11.2–11.4 GB.
-- **Quantized KV is slower:** it decodes slower at 82k because it
-  re-dequantizes each layer every token, ~58 ms per token
-  (`kv_decode_micro.json`).
+- **Quantized KV decode:** the default path re-dequantizes each layer every
+  token (4.49 tok/s at 82k). The fused 8-bit kernel (`fused_decode=True`, off
+  by default) decodes at 7.59 tok/s with identical tokens, about plain-cache
+  speed with 1.6 GB less KV (`kv_qdecode_*.json`; results.md).
 - **Pruned-model actions:** greedy action match is 6/20 exact and 18/20 same
   tool, against a noise floor of 20/20 (`action_diag.json`).
 - **Parity:** against llama.cpp, the one valid row scored top-1 0.969
@@ -109,15 +110,13 @@ call; it stays for reproducibility. Design and verdict:
 
 ## Open, optional work
 
-- **Fused 8-bit KV decode kernel** (`mx.fast.metal_kernel`). The dequantize
-  costs ~58 ms per token at 82k.
-  - `make_quantized_cache(..., quantized_decode=True)`, off by default, uses
-    mlx-lm's quantized attention instead. It saves only ~9 ms per token in a
-    single-layer test.
-  - It needs a GPU A/B before use; the coordinator decides after moeStream's
-    KV profile lands.
-  - Plain KV is the recommendation when ~1.6 GB more fits.
-- **An exact fix for the streaming sync floor.** With every expert resident
+- **Fused 8-bit KV decode kernel: built and measured** (`laguna_mlx/q8_attn.py`).
+  1.69× faster decode than dequantize at 82k, identical tokens. Open:
+  - the kernel runs at ~15 GB/s effective, so tuning it could beat plain KV;
+  - streaming with 8-bit fused KV isn't measured;
+  - whether to turn `fused_decode` on by default is the user's call.
+- **An exact fix for the streaming sync floor** (not pursued, the user's call:
+  it needs a C++ MLX extension). With every expert resident
   (128 slots), streaming is still 22 ms per step slower than resident at 32k
   (68.9 against 46.8 ms; `stream_profile.json`). That's the cost of 39
   host round-trips per token. Removing it exactly needs GPU-side page

@@ -123,7 +123,7 @@ with one cache per layer:
 |---|---|
 | `model.make_cache` (default) | plain KVCache on full-attention layers, rotating window on sliding layers |
 | `lambda: laguna_mlx.cache.make_trimmable_cache(model, slack=64)` | sliding layers trimmable (speculative decoding, `sim_drop` windows) |
-| `lambda: laguna_mlx.cache.make_quantized_cache(model, bits, group_size=64, quantized_decode=False)` | 8- or 4-bit K/V on full-attention layers (rule 7) |
+| `lambda: laguna_mlx.cache.make_quantized_cache(model, bits, group_size=64, quantized_decode=False, fused_decode=False)` | 8- or 4-bit K/V on full-attention layers (rule 7); `fused_decode` (8-bit only) uses the fused decode kernel |
 
 ### `scripts/diag_actions.py`
 

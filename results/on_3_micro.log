@@ -1,0 +1,4 @@
+8192 {'plain_ms': 0.749, 'dequant_sdpa_ms': 1.56, 'dequant_only_ms': 1.133, 'quantized_sdpa_ms': 0.968, 'fused_q8_ms': 1.192, 'bf16_kv_gb': 0.034, 'q8_kv_gb': 0.018}
+32768 {'plain_ms': 2.511, 'dequant_sdpa_ms': 4.679, 'dequant_only_ms': 2.522, 'quantized_sdpa_ms': 3.613, 'fused_q8_ms': 3.501, 'bf16_kv_gb': 0.134, 'q8_kv_gb': 0.071}
+82671 {'plain_ms': 6.739, 'dequant_sdpa_ms': 12.46, 'dequant_only_ms': 6.022, 'quantized_sdpa_ms': 10.928, 'fused_q8_ms': 12.244, 'bf16_kv_gb': 0.339, 'q8_kv_gb': 0.18}
+watch: peak swap 512 MB, peak footprint 2005 MB

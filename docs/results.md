@@ -339,14 +339,54 @@ GPU job started.
   8-bit plus bf16, 1.80 + 3.39 = 5.19 GB of KV at 82k. The plain cache is
   3.39 GB and already decodes at full speed. Any budget that fits the copy
   fits the plain cache with 1.8 GB to spare.
+- **Superseded by the real-model A/B below:** the flag gains far more than
+  this single-layer estimate.
+
+### 8-bit decode on the real model: dequantize vs `quantized_decode` vs fused kernel
+
+Sources: `results/kv_qdecode_off.json`, `kv_qdecode_on.json`,
+`kv_qdecode_fused.json` (`python3 -m scripts.bench_kv --qdecode off|on|fused`).
+Resident pruned-50 model, 8-bit KV, longest django session (82,671 tokens),
+64 greedy decode steps after the prefill. One run each, back to back in one
+overnight GPU slot.
+
+| Decode path | Decode tok/s @82k | vs dequantize | Decode tokens vs dequantize |
+|---|---|---|---|
+| Dequantize then fused SDPA (default) | 4.49 | 1.0× | — |
+| mlx-lm quantized SDPA (`quantized_decode=True`) | 6.64 | 1.48× | 64/64 identical |
+| **Fused 8-bit kernel (`fused_decode=True`)** | **7.59** | **1.69×** | **64/64 identical** |
+
+- **All three have the same peak (13.09 GB) and KV (1.80 GB).** Peak is set by
+  the prefill, which is identical in all three, so replay quality is the 8-bit
+  row's (top-1 0.9963, KL 0.0020, `kv.json`).
+- **The fused kernel** is `laguna_mlx/q8_attn.py`: one `mx.fast.metal_kernel`
+  pass per layer reads the packed K/V once, dequantizes in registers and keeps
+  an online softmax; small mx ops merge the per-block partials. Nothing
+  cache-sized is written. It matches dequantize + SDPA within bf16 rounding
+  (`tests/test_q8_attn.py`).
+- **At 7.59 tok/s, 8-bit KV with the fused kernel is about as fast as the plain
+  cache** (7.42 tok/s in `kv.json`, a different run), with 1.6 GB less KV.
+- **The single-layer microbench does not predict this.** Rerun with the kernel
+  (`results/kv_decode_micro_fused.json`), the fused kernel alone takes 12.24 ms
+  per layer at 82k, about the same as dequantize + SDPA (12.46 ms), and
+  slower than mlx-lm's quantized SDPA (10.93 ms). Yet in the model it saves
+  ~91 ms per token over the dequantize path (222.7 against 131.8 ms). So most
+  of the real gap was not the arithmetic but the 0.68 GB of bf16 temporaries
+  per layer per token, as suspected above. That cause is inferred, not
+  measured directly.
+- **The kernel itself is slow:** 0.18 GB in 12.24 ms is ~15 GB/s effective.
+  Each simdgroup walks its 64 keys in sequence with 6 `simd_sum` reductions
+  and 12 `exp`s per key, so it is likely latency-bound, not bandwidth-bound
+  (not profiled). Tuning it (more keys per lane, fewer
+  reductions) could make 8-bit decode faster than plain. Not attempted.
 - **Recommendation:**
-  - If 1.6 GB more KV fits (3.39 against 1.80 GB at 82k), use the plain
-    cache. It's fastest and exact.
-  - If it doesn't fit, turn on `quantized_decode=True` only after a GPU A/B
-    shows it helps; that A/B isn't run yet. Expect at most ~9 ms per token at
-    82k from the kernel, plus whatever churn it removes.
-  - Closing the rest needs a fused quantized-KV decode kernel
-    (`mx.fast.metal_kernel`). That isn't built.
+  - If 1.6 GB more KV fits, the plain cache stays the simplest exact choice.
+  - If it doesn't, use 8-bit KV with `fused_decode=True`. Both flags are still
+    off by default; flipping the default is the user's call.
+  - Resident 8-bit still fails the 12 GB budget (13.09 GB peak, set by
+    prefill), so the Part 3 answer (streaming, plain KV) is unchanged.
+    Streaming with 8-bit fused KV isn't measured; it would lower that
+    answer's 10.16 GB peak by up to the 1.6 GB KV difference.
 
 ---
 

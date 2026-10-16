@@ -1,0 +1,4 @@
+[transformers] The tokenizer you are loading from 'models/Laguna-XS-2.1-pruned-50' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+resident/8q/django__django-11039 {'tokens': 82671, 'kv_gb': 1.79929088, 'decode_tok_s': 6.638241451943763, 'decode_peak_gpu_gb': 13.08879882}
+{}
+watch: peak swap 512 MB, peak footprint 17408 MB
