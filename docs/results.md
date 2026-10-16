@@ -385,8 +385,39 @@ overnight GPU slot.
     off by default; flipping the default is the user's call.
   - Resident 8-bit still fails the 12 GB budget (13.09 GB peak, set by
     prefill), so the Part 3 answer (streaming, plain KV) is unchanged.
-    Streaming with 8-bit fused KV isn't measured; it would lower that
-    answer's 10.16 GB peak by up to the 1.6 GB KV difference.
+    For streaming with 8-bit fused KV, see the next section.
+
+### 8-bit fused KV on the streaming path (`serve_streaming --fused-decode`)
+
+Sources: `results/kv_stream_q8.json`, `kv_stream_q8fused.json`,
+`kv_stream_plain.json` (`python3 -m scripts.bench_kv --target streaming
+--slots 64 --cache-limit-gb 1.0 --qdecode off|fused|plain`). The `laptop16`
+configuration (pruned-50 pack, 64 slots, 1 GB pool cap), longest django
+session (82,671 tokens), 64 greedy decode steps. One run each, back to back in
+one GPU slot, while the laptop was in use. Footprint is the watchdog's peak
+process footprint (`results/sf_*.log`).
+
+| KV cache | Decode tok/s @82k | ms/token | Peak GB | Footprint GB | KV GB | Decode tokens |
+|---|---|---|---|---|---|---|
+| 8-bit, dequantize | 3.87 | 258.4 | 8.72 | 9.62 | 1.80 | — |
+| 8-bit, fused kernel | 5.70 | 175.5 | 8.72 | 9.54 | 1.80 | identical to dequantize, 64/64 |
+| **Plain (`laptop16` default)** | **6.07** | **164.6** | **10.17** | **11.26** | 3.39 | first differs from 8-bit at step 10 |
+
+- **The fused kernel is 1.47× faster than dequantize on the streaming path,**
+  with identical tokens. That's less than resident's 1.69×, as expected: the
+  streaming sync floor is the same in every row.
+- **Plain is still faster, by 11 ms per token (6%), and exact.** 8-bit KV is
+  not exact: greedy decode leaves plain's path after 10 tokens on this
+  session. On replay it passes the gate (top-1 0.9963, KL 0.0020 resident,
+  `kv.json`), but the Part 3 answer is exact (top-1 1.0, KL 0).
+- **8-bit fused saves 1.45 GB of peak** (8.72 against 10.17 GB) and 1.7 GB of
+  footprint. Both fit the 12 GB budget.
+- **Decision: `laptop16` keeps the plain cache;** `--fused-decode` is the
+  opt-in for a machine where those 1.45 GB matter. The rule set beforehand
+  was: turn it on only if it matches its own unfused tokens and is at least
+  as fast as plain. It meets the first but not the second, and plain is exact.
+- Plain streaming here is 6.07 tok/s against 6.87 in `kv.json`. Different
+  runs, and the laptop was in use; single runs, no variance measured.
 
 ---
 

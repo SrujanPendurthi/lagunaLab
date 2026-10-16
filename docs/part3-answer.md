@@ -96,6 +96,15 @@ model, tok = load_streaming("models/Laguna-XS-2.1-pruned-50-packed", slots=64, c
 `scripts/serve_streaming.py` passes `cache_limit_gb=1.0`. Set its slot count
 with `--slots 64`; its default is unchanged.
 
+## Lower-memory option: 8-bit KV with the fused kernel
+
+`serve_streaming --preset laptop16 --fused-decode` keeps 8-bit K/V and decodes
+it with the fused kernel. At 82k it peaks at 8.72 GB instead of 10.17 GB and
+decodes at 5.70 tok/s against 6.07 for plain, in the same session
+(`results/kv_stream_q8fused.json`, `kv_stream_plain.json`). It is not exact:
+replay top-1 0.9963, KL 0.0020 (`kv.json`, resident). Plain stays the
+recommendation; this is for a machine where 1.45 GB matters more.
+
 ## What is not measured
 
 - **An actual 16 GB Mac.** The 12 GB budget is an assumption.

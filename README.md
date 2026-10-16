@@ -113,8 +113,9 @@ call; it stays for reproducibility. Design and verdict:
 - **Fused 8-bit KV decode kernel: built and measured** (`laguna_mlx/q8_attn.py`).
   1.69× faster decode than dequantize at 82k, identical tokens. Open:
   - the kernel runs at ~15 GB/s effective, so tuning it could beat plain KV;
-  - streaming with 8-bit fused KV isn't measured;
-  - whether to turn `fused_decode` on by default is the user's call.
+  - on the streaming path (`serve_streaming --fused-decode`) it decodes at
+    5.70 tok/s against plain's 6.07, with 1.45 GB less peak (8.72 against
+    10.17 GB). `laptop16` keeps plain: faster and exact (results.md).
 - **An exact fix for the streaming sync floor** (not pursued, the user's call:
   it needs a C++ MLX extension). With every expert resident
   (128 slots), streaming is still 22 ms per step slower than resident at 32k

@@ -39,6 +39,8 @@ PRESETS = {
     # ponytail: the prompt-cache limits are the ones pool ran with on 24 GB; their memory on
     # a 16 GB Mac isn't measured (serve end-to-end is an open item). Explicit flags win.
     "laptop16": {"pack": "models/Laguna-XS-2.1-pruned-50-packed", "slots": 64, "cache_limit_gb": 1.0,
+                 # off: plain decodes faster (6.07 vs 5.70 tok/s @82k) and is exact; fused saves
+                 # 1.45 GB peak (results/kv_stream_*.json, docs/results.md)
                  "fused_decode": False,
                  "server_args": {"--max-tokens": "4096", "--prompt-cache-size": "6",
                                  "--prompt-cache-bytes": "4294967296"}},
