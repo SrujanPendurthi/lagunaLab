@@ -20,6 +20,7 @@ from pathlib import Path
 import mlx_lm.server as server
 
 import laguna_mlx  # noqa: F401
+from laguna_mlx import mx_without_wired_limit
 from laguna_mlx.streaming import load_streaming
 
 PACK = "models/Laguna-XS-2.1-packed"
@@ -85,6 +86,9 @@ def main():
         slots = int(sys.argv[i + 1])
         del sys.argv[i : i + 2]
     server.load = _load
+    # mlx_lm.server.main raises the wired limit to the max working set; streaming doesn't
+    # need it, and it pins memory the rest of the machine needs (it stalled video playback)
+    server.mx = mx_without_wired_limit()
     if "--model" not in sys.argv:
         sys.argv += ["--model", PACK]
     server.main()
